@@ -77,9 +77,6 @@ public:
 		FFLOAD_WAV = 2,
 		FFLOAD_IMAGE = 3,
 		FFLOAD_ANIM = 4,
-#ifdef _CORY_TESTING
-		FFLOAD_GEOMETRY = 5,
-#endif
 		FFLOAD_XML = 6,
 		FFLOAD_SLOBJECT = 7,
 		FFLOAD_RAW = 8,
@@ -99,9 +96,6 @@ public:
 		FFSAVE_BMP = 5,
 		FFSAVE_AVI = 6,
 		FFSAVE_ANIM = 7,
-#ifdef _CORY_TESTING
-		FFSAVE_GEOMETRY = 8,
-#endif
 		FFSAVE_XML = 9,
 		FFSAVE_COLLADA = 10,
 		FFSAVE_RAW = 11,
@@ -178,7 +172,7 @@ private:
                                    void (*callback)(bool, std::vector<std::string>&, void*),
                                    void *userdata);
 	bool doNavSaveDialog(ESaveFilter filter, const std::string& filename);
-    std::vector<std::string>* navOpenFilterProc(ELoadFilter filter);
+    std::unique_ptr<std::vector<std::string>> navOpenFilterProc(ELoadFilter filter);
     bool doNavSaveDialogModeless(ESaveFilter filter,
                                  const std::string& filename,
                                  void (*callback)(bool, std::string&, void*),

@@ -55,9 +55,6 @@ LLFilePicker LLFilePicker::sInstance;
 #define IMAGE_FILTER L"Images (*.tga; *.bmp; *.jpg; *.jpeg; *.png)\0*.tga;*.bmp;*.jpg;*.jpeg;*.png\0"
 #define ANIM_FILTER L"Animations (*.bvh; *.anim)\0*.bvh;*.anim\0"
 #define COLLADA_FILTER L"Scene (*.dae)\0*.dae\0"
-#ifdef _CORY_TESTING
-#define GEOMETRY_FILTER L"SL Geometry (*.slg)\0*.slg\0"
-#endif
 #define XML_FILTER L"XML files (*.xml)\0*.xml\0"
 #define SLOBJECT_FILTER L"Objects (*.slobject)\0*.slobject\0"
 #define RAW_FILTER L"RAW files (*.raw)\0*.raw\0"
@@ -197,12 +194,6 @@ BOOL LLFilePicker::setupFilter(ELoadFilter filter)
 		mOFN.lpstrFilter = COLLADA_FILTER \
 			L"\0";
 		break;
-#ifdef _CORY_TESTING
-	case FFLOAD_GEOMETRY:
-		mOFN.lpstrFilter = GEOMETRY_FILTER \
-			L"\0";
-		break;
-#endif
 	case FFLOAD_XML:
 		mOFN.lpstrFilter = XML_FILTER \
 			L"\0";
@@ -498,18 +489,6 @@ BOOL LLFilePicker::getSaveFile(ESaveFilter filter, const std::string& filename, 
 			L"XAF Anim File (*.xaf)\0*.xaf\0" \
 			L"\0";
 		break;
-#ifdef _CORY_TESTING
-	case FFSAVE_GEOMETRY:
-		if (filename.empty())
-		{
-			wcsncpy( mFilesW,L"untitled.slg", FILENAME_BUFFER_SIZE);	/*Flawfinder: ignore*/
-		}
-		mOFN.lpstrDefExt = L"slg";
-		mOFN.lpstrFilter =
-			L"SLG SL Geometry File (*.slg)\0*.slg\0" \
-			L"\0";
-		break;
-#endif
 	case FFSAVE_XML:
 		if (filename.empty())
 		{
@@ -614,9 +593,9 @@ BOOL LLFilePicker::getSaveFileModeless(ESaveFilter filter,
 
 #elif LL_DARWIN
 
-std::vector<std::string>* LLFilePicker::navOpenFilterProc(ELoadFilter filter) //(AEDesc *theItem, void *info, void *callBackUD, NavFilterModes filterMode)
+std::unique_ptr<std::vector<std::string>> LLFilePicker::navOpenFilterProc(ELoadFilter filter) //(AEDesc *theItem, void *info, void *callBackUD, NavFilterModes filterMode)
 {
-    std::vector<std::string> *allowedv = new std::vector< std::string >;
+    std::unique_ptr<std::vector<std::string>> allowedv(new std::vector< std::string >);
     switch(filter)
     {
         case FFLOAD_ALL:
@@ -652,11 +631,6 @@ std::vector<std::string>* LLFilePicker::navOpenFilterProc(ELoadFilter filter) //
         case FFLOAD_COLLADA:
             allowedv->push_back("dae");
             break;
-#ifdef _CORY_TESTING
-        case FFLOAD_GEOMETRY:
-            allowedv->push_back("slg");
-            break;
-#endif
         case FFLOAD_XML:
             allowedv->push_back("xml");
             break;
@@ -689,9 +663,9 @@ bool	LLFilePicker::doNavChooseDialog(ELoadFilter filter)
     
 	gViewerWindow->getWindow()->beforeDialog();
     
-    std::vector<std::string> *allowed_types=navOpenFilterProc(filter);
+    std::unique_ptr<std::vector<std::string>> allowed_types = navOpenFilterProc(filter);
     
-    std::vector<std::string> *filev  = doLoadDialog(allowed_types, 
+    std::unique_ptr<std::vector<std::string>> filev  = doLoadDialog(allowed_types.get(),
                                                     mPickOptions);
 
 	gViewerWindow->getWindow()->afterDialog();
@@ -716,9 +690,9 @@ bool    LLFilePicker::doNavChooseDialogModeless(ELoadFilter filter,
         return false;
     }
     
-    std::vector<std::string> *allowed_types=navOpenFilterProc(filter);
+    std::unique_ptr<std::vector<std::string>> allowed_types=navOpenFilterProc(filter);
     
-    doLoadDialogModeless(allowed_types,
+    doLoadDialogModeless(allowed_types.get(),
                                                     mPickOptions,
                                                     callback,
                                                     userdata);
@@ -771,14 +745,6 @@ void set_nav_save_data(LLFilePicker::ESaveFilter filter, std::string &extension,
             creator = "\?\?\?\?";
             extension = "xaf";
             break;
-
-#ifdef _CORY_TESTING
-        case LLFilePicker::FFSAVE_GEOMETRY:
-            type = "\?\?\?\?";
-            creator = "\?\?\?\?";
-            extension = "slg";
-            break;
-#endif
             
         case LLFilePicker::FFSAVE_XML:
             type = "\?\?\?\?";
@@ -826,7 +792,7 @@ bool	LLFilePicker::doNavSaveDialog(ESaveFilter filter, const std::string& filena
 	gViewerWindow->getWindow()->beforeDialog();
 
 	// Run the dialog
-    std::string* filev = doSaveDialog(&namestring, 
+    std::unique_ptr<std::string> filev = doSaveDialog(&namestring, 
                  &type,
                  &creator,
                  &extension,
@@ -1354,7 +1320,7 @@ static std::string add_save_texture_filter_to_gtkchooser(GtkWindow *picker)
 	return caption;
 }
 
-BOOL LLFilePicker::getSaveFile( ESaveFilter filter, const std::string& filename )
+BOOL LLFilePicker::getSaveFile( ESaveFilter filter, const std::string& filename, bool blocking )
 {
 	BOOL rtn = FALSE;
 
@@ -1571,7 +1537,7 @@ BOOL LLFilePicker::getMultipleOpenFiles( ELoadFilter filter, bool blocking)
 // Hacky stubs designed to facilitate fake getSaveFile and getOpenFile with
 // static results, when we don't have a real filepicker.
 
-BOOL LLFilePicker::getSaveFile( ESaveFilter filter, const std::string& filename )
+BOOL LLFilePicker::getSaveFile( ESaveFilter filter, const std::string& filename, bool blocking )
 {
 	// if local file browsing is turned off, return without opening dialog
 	// (Even though this is a stub, I think we still should not return anything at all)

@@ -34,6 +34,9 @@
 #include <iostream>
 #include "apr_base64.h"
 
+#include <boost/iostreams/device/array.hpp>
+#include <boost/iostreams/stream.hpp>
+
 #ifdef LL_USESYSTEMLIBS
 # include <zlib.h>
 #else
@@ -122,14 +125,20 @@ bool LLSDSerialize::deserialize(LLSD& sd, std::istream& str, llssize max_bytes)
 	char hdr_buf[MAX_HDR_LEN + 1] = ""; /* Flawfinder: ignore */
 	bool fail_if_not_legacy = false;
 
-	/*
-	 * Get the first line before anything. Don't read more than max_bytes:
-	 * this get() overload reads no more than (count-1) bytes into the
-	 * specified buffer. In the usual case when max_bytes exceeds
-	 * sizeof(hdr_buf), get() will read no more than sizeof(hdr_buf)-2.
-	 */
-	str.get(hdr_buf, llmin(max_bytes+1, sizeof(hdr_buf)-1), '\n');
+    /*
+     * Get the first line before anything. Don't read more than max_bytes:
+     * this get() overload reads no more than (count-1) bytes into the
+     * specified buffer. In the usual case when max_bytes exceeds
+     * sizeof(hdr_buf), get() will read no more than sizeof(hdr_buf)-2.
+     */
+    llssize max_hdr_read = MAX_HDR_LEN;
+	if (max_bytes != LLSDSerialize::SIZE_UNLIMITED)
+	{
+        max_hdr_read = llmin(max_bytes + 1, max_hdr_read);
+	}
+    str.get(hdr_buf, max_hdr_read, '\n');
 	auto inbuf = str.gcount();
+
 	// https://en.cppreference.com/w/cpp/io/basic_istream/get
 	// When the get() above sees the specified delimiter '\n', it stops there
 	// without pulling it from the stream. If it turns out that the stream
@@ -2177,7 +2186,9 @@ std::string zip_llsd(LLSD& data)
 		{ //copy result into output
 			if (strm.avail_out >= CHUNK)
 			{
-				free(output);
+				deflateEnd(&strm);
+				if(output)
+					free(output);
 				LL_WARNS() << "Failed to compress LLSD block." << LL_ENDL;
 				return std::string();
 			}
@@ -2200,7 +2211,9 @@ std::string zip_llsd(LLSD& data)
 		}
 		else 
 		{
-			free(output);
+			deflateEnd(&strm);
+			if(output)
+				free(output);
 			LL_WARNS() << "Failed to compress LLSD block." << LL_ENDL;
 			return std::string();
 		}
@@ -2211,7 +2224,8 @@ std::string zip_llsd(LLSD& data)
 
 	std::string result((char*) output, size);
 	deflateEnd(&strm);
-	free(output);
+	if(output)
+		free(output);
 
 	return result;
 }
@@ -2221,53 +2235,66 @@ std::string zip_llsd(LLSD& data)
 // and deserializes from that copy using LLSDSerialize
 LLUZipHelper::EZipRresult LLUZipHelper::unzip_llsd(LLSD& data, std::istream& is, S32 size)
 {
-	U8* result = NULL;
-	llssize cur_size = 0;
-	z_stream strm;
-		
-	const U32 CHUNK = 65536;
-
-	U8 *in = new(std::nothrow) U8[size];
+	std::unique_ptr<U8[]> in = std::unique_ptr<U8[]>(new(std::nothrow) U8[size]);
 	if (!in)
 	{
 		return ZR_MEM_ERROR;
 	}
-	is.read((char*) in, size); 
+	is.read((char*) in.get(), size); 
 
-	U8 out[CHUNK];
+	return unzip_llsd(data, in.get(), size);
+}
+
+LLUZipHelper::EZipRresult LLUZipHelper::unzip_llsd(LLSD& data, const U8* in, S32 size)
+{
+	U8* result = NULL;
+	llssize cur_size = 0;
+	z_stream strm;
+
+	constexpr U32 CHUNK = 1024 * 512;
+
+	static thread_local std::unique_ptr<U8[]> out;
+	if (!out)
+	{
+		out = std::unique_ptr<U8[]>(new(std::nothrow) U8[CHUNK]);
+	}
 		
 	strm.zalloc = Z_NULL;
 	strm.zfree = Z_NULL;
 	strm.opaque = Z_NULL;
 	strm.avail_in = size;
-	strm.next_in = in;
+	strm.next_in = const_cast<U8*>(in);
 
 	S32 ret = inflateInit(&strm);
 	
 	do
 	{
 		strm.avail_out = CHUNK;
-		strm.next_out = out;
+		strm.next_out = out.get();
 		ret = inflate(&strm, Z_NO_FLUSH);
-		if (ret == Z_STREAM_ERROR)
-		{
-			inflateEnd(&strm);
-			free(result);
-			delete [] in;
-			return ZR_DATA_ERROR;
-		}
-		
 		switch (ret)
 		{
 		case Z_NEED_DICT:
-			ret = Z_DATA_ERROR;
 		case Z_DATA_ERROR:
-		case Z_MEM_ERROR:
+		{
 			inflateEnd(&strm);
 			free(result);
-			delete [] in;
+			return ZR_DATA_ERROR;
+		}
+		case Z_STREAM_ERROR:
+		case Z_BUF_ERROR:
+		{
+			inflateEnd(&strm);
+			free(result);
+			return ZR_BUFFER_ERROR;
+		}
+
+		case Z_MEM_ERROR:
+		{
+			inflateEnd(&strm);
+			free(result);
 			return ZR_MEM_ERROR;
-			break;
+		}
 		}
 
 		U32 have = CHUNK-strm.avail_out;
@@ -2280,17 +2307,15 @@ LLUZipHelper::EZipRresult LLUZipHelper::unzip_llsd(LLSD& data, std::istream& is,
 			{
 				free(result);
 			}
-			delete[] in;
 			return ZR_MEM_ERROR;
 		}
 		result = new_result;
-		memcpy(result+cur_size, out, have);
+		memcpy(result+cur_size, out.get(), have);
 		cur_size += have;
 
-	} while (ret == Z_OK);
+	} while (ret == Z_OK && ret != Z_STREAM_END);
 
 	inflateEnd(&strm);
-	delete [] in;
 
 	if (ret != Z_STREAM_END)
 	{
@@ -2300,37 +2325,11 @@ LLUZipHelper::EZipRresult LLUZipHelper::unzip_llsd(LLSD& data, std::istream& is,
 
 	//result now points to the decompressed LLSD block
 	{
-		std::istringstream istr;
-		// Since we are using this for meshes, data we are dealing with tend to be large.
-		// So string can potentially fail to allocate, make sure this won't cause problems
-		try
-		{
-			std::string res_str((char*)result, cur_size);
+		char* result_ptr = strip_deprecated_header((char*)result, cur_size);
 
-			std::string deprecated_header("<? LLSD/Binary ?>");
-
-			if (res_str.substr(0, deprecated_header.size()) == deprecated_header)
-			{
-				res_str = res_str.substr(deprecated_header.size() + 1, cur_size);
-			}
-			cur_size = res_str.size();
-
-			istr.str(res_str);
-		}
-#ifdef LL_WINDOWS
-		catch (std::length_error)
-		{
-			free(result);
-			return ZR_SIZE_ERROR;
-		}
-#endif
-		catch (std::bad_alloc&)
-		{
-			free(result);
-			return ZR_MEM_ERROR;
-		}
-
-		if (!LLSDSerialize::fromBinary(data, istr, cur_size, UNZIP_LLSD_MAX_DEPTH))
+		boost::iostreams::stream<boost::iostreams::array_source> istrm(result_ptr, cur_size);
+		
+		if (!LLSDSerialize::fromBinary(data, istrm, cur_size, UNZIP_LLSD_MAX_DEPTH))
 		{
 			free(result);
 			return ZR_PARSE_ERROR;
@@ -2443,3 +2442,23 @@ U8* unzip_llsdNavMesh( bool& valid, size_t& outsize, std::istream& is, S32 size 
 
 	return result;
 }
+
+char* strip_deprecated_header(char* in, llssize& cur_size, llssize* header_size)
+{
+	const char* deprecated_header = "<? LLSD/Binary ?>";
+	constexpr size_t deprecated_header_size = 17;
+
+	if (cur_size > deprecated_header_size
+		&& memcmp(in, deprecated_header, deprecated_header_size) == 0)
+	{
+		in = in + deprecated_header_size;
+		cur_size = cur_size - deprecated_header_size;
+		if (header_size)
+		{
+			*header_size = deprecated_header_size + 1;
+		}
+	}
+
+	return in;
+}
+
