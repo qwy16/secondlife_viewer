@@ -38,6 +38,7 @@ import itertools
 import operator
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -115,7 +116,7 @@ BASE_ARGUMENTS=[
     dict(name='build', description='Build directory.', default=DEFAULT_SRCTREE),
     dict(name='buildtype', description='Build type (i.e. Debug, Release, RelWithDebInfo).', default=None),
     dict(name='bundleid',
-         description="""The Mac OS X Bundle identifier.""",
+         description="""The macOS Bundle identifier.""",
          default="com.secondlife.indra.viewer"),
     dict(name='channel',
          description="""The channel to use for updates, packaging, settings name, etc.""",
@@ -145,7 +146,7 @@ BASE_ARGUMENTS=[
     dict(name='signature',
          description="""This specifies an identity to sign the viewer with, if any.
         If no value is supplied, the default signature will be used, if any. Currently
-        only used on Mac OS X.""",
+        only used on macOS.""",
          default=None),
     dict(name='source',
          description='Source directory.',
@@ -531,15 +532,15 @@ class LLManifest(object, metaclass=LLManifestRegistry):
         self.cmakedirs(path)
         return path
 
-    def run_command(self, command):
-        """ 
-        Runs an external command.  
+    def run_command(self, command, **kwds):
+        """
+        Runs an external command.
         Raises ManifestError exception if the command returns a nonzero status.
         """
-        print("Running command:", command)
+        print("Running command:", shlex.join(command))
         sys.stdout.flush()
         try:
-            subprocess.check_call(command)
+            subprocess.check_call(command, **kwds)
         except subprocess.CalledProcessError as err:
             raise ManifestError( "Command %s returned non-zero status (%s)"
                                 % (command, err.returncode) )
@@ -636,7 +637,7 @@ class LLManifest(object, metaclass=LLManifestRegistry):
             'vers':'_'.join(self.args['version'])}
         print("Creating unpacked file:", unpacked_file_name)
         # could add a gz here but that doubles the time it takes to do this step
-        tf = tarfile.open(self.src_path_of(unpacked_file_name), 'w:')
+        tf = tarfile.open(self.build_path_of(unpacked_file_name), 'w:')
         # add the entire installation package, at the very top level
         tf.add(self.get_dst_prefix(), "")
         tf.close()

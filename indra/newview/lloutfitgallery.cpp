@@ -1,4 +1,4 @@
-/** 
+/**
  * @file lloutfitgallery.cpp
  * @author Pavlo Kryvych
  * @brief Visual gallery of agent's outfits for My Appearance side panel
@@ -6,21 +6,21 @@
  * $LicenseInfo:firstyear=2015&license=viewerlgpl$
  * Second Life Viewer Source Code
  * Copyright (C) 2015, Linden Research, Inc.
- * 
+ *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation;
  * version 2.1 of the License only.
- * 
+ *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * Lesser General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
- * 
+ *
  * Linden Research, Inc., 945 Battery Street, San Francisco, CA  94111  USA
  * $/LicenseInfo$
  */
@@ -28,20 +28,17 @@
 #include "llviewerprecompiledheaders.h" // must be first include
 #include "lloutfitgallery.h"
 
-#include <boost/foreach.hpp>
-
 // llcommon
 #include "llcommonutils.h"
 #include "llfilesystem.h"
 
 #include "llaccordionctrltab.h"
 #include "llappearancemgr.h"
-#include "llagentbenefits.h"
 #include "llerror.h"
 #include "llfilepicker.h"
 #include "llfloaterperms.h"
 #include "llfloaterreg.h"
-#include "llfloatersimpleoutfitsnapshot.h"
+#include "llfloatersimplesnapshot.h"
 #include "llimagedimensionsinfo.h"
 #include "llinventoryfunctions.h"
 #include "llinventorymodel.h"
@@ -58,15 +55,20 @@
 
 static LLPanelInjector<LLOutfitGallery> t_outfit_gallery("outfit_gallery");
 
-#define MAX_OUTFIT_PHOTO_WIDTH 256
-#define MAX_OUTFIT_PHOTO_HEIGHT 256
+// The maximum resolution at which to load the outfit photo. If the given
+// texture has a higher resolution, tell the texture streaming system to
+// only load the resolution needed. An in-world object may request to load
+// the texture at a higher resolution, but that won't affect textures
+// loaded with LLViewerTexture::FETCHED_TEXTURE. (see
+// LLOutfitGalleryItem::setImageAssetId and also
+// LLViewerTexture::LOD_TEXTURE)
+#define MAX_OUTFIT_PHOTO_LOAD_WIDTH 256
+#define MAX_OUTFIT_PHOTO_LOAD_HEIGHT 256
 
 const S32 GALLERY_ITEMS_PER_ROW_MIN = 2;
 
 LLOutfitGallery::LLOutfitGallery(const LLOutfitGallery::Params& p)
     : LLOutfitListBase(),
-      mTexturesObserver(NULL),
-      mOutfitsObserver(NULL),
       mScrollPanel(NULL),
       mGalleryPanel(NULL),
       mLastRowPanel(NULL),
@@ -109,12 +111,10 @@ const LLOutfitGallery::Params& LLOutfitGallery::getDefaultParams()
     return LLUICtrlFactory::getDefaultParams<LLOutfitGallery>();
 }
 
-BOOL LLOutfitGallery::postBuild()
+bool LLOutfitGallery::postBuild()
 {
-    BOOL rv = LLOutfitListBase::postBuild();
+    bool rv = LLOutfitListBase::postBuild();
     mScrollPanel = getChild<LLScrollContainer>("gallery_scroll_panel");
-    LLPanel::Params params = LLPanel::getDefaultParams(); // Don't parse XML when creating dummy LLPanel
-    mGalleryPanel = LLUICtrlFactory::create<LLPanel>(params);
     mMessageTextBox = getChild<LLTextBox>("no_outfits_txt");
     mOutfitGalleryMenu = new LLOutfitGalleryContextMenu(this);
     return rv;
@@ -125,15 +125,14 @@ void LLOutfitGallery::onOpen(const LLSD& info)
     LLOutfitListBase::onOpen(info);
     if (!mGalleryCreated)
     {
-        loadPhotos();
         uuid_vec_t cats;
         getCurrentCategories(cats);
-        int n = cats.size();
+        int n = static_cast<int>(cats.size());
         buildGalleryPanel(n);
         mScrollPanel->addChild(mGalleryPanel);
         for (int i = 0; i < n; i++)
         {
-            addToGallery(mOutfitMap[cats[i]]);
+            addToGallery(getItem(cats[i]));
         }
         reArrangeRows();
         mGalleryCreated = true;
@@ -146,6 +145,264 @@ void LLOutfitGallery::draw()
     if (mGalleryCreated)
     {
         updateRowsIfNeeded();
+    }
+}
+
+bool LLOutfitGallery::handleKeyHere(KEY key, MASK mask)
+{
+    bool handled = false;
+    switch (key)
+    {
+        case KEY_RETURN:
+            // Open selected items if enter key hit on the inventory panel
+            if (mask == MASK_NONE && mSelectedOutfitUUID.notNull())
+            {
+                // Or should it wearSelectedOutfit?
+                getSelectedItem()->openOutfitsContent();
+            }
+            handled = true;
+            break;
+        case KEY_DELETE:
+#if LL_DARWIN
+        case KEY_BACKSPACE:
+#endif
+            // Delete selected items if delete or backspace key hit on the inventory panel
+            // Note: on Mac laptop keyboards, backspace and delete are one and the same
+            if (mSelectedOutfitUUID.notNull())
+            {
+                onRemoveOutfit(mSelectedOutfitUUID);
+            }
+            handled = true;
+            break;
+
+        case KEY_F2:
+            LLAppearanceMgr::instance().renameOutfit(mSelectedOutfitUUID);
+            handled = true;
+            break;
+
+        case KEY_PAGE_UP:
+            if (mScrollPanel)
+            {
+                mScrollPanel->pageUp(30);
+            }
+            handled = true;
+            break;
+
+        case KEY_PAGE_DOWN:
+            if (mScrollPanel)
+            {
+                mScrollPanel->pageDown(30);
+            }
+            handled = true;
+            break;
+
+        case KEY_HOME:
+            if (mScrollPanel)
+            {
+                mScrollPanel->goToTop();
+            }
+            handled = true;
+            break;
+
+        case KEY_END:
+            if (mScrollPanel)
+            {
+                mScrollPanel->goToBottom();
+            }
+            handled = true;
+            break;
+
+        case KEY_LEFT:
+            moveLeft();
+            handled = true;
+            break;
+
+        case KEY_RIGHT:
+            moveRight();
+            handled = true;
+            break;
+
+        case KEY_UP:
+            moveUp();
+            handled = true;
+            break;
+
+        case KEY_DOWN:
+            moveDown();
+            handled = true;
+            break;
+
+        default:
+            break;
+    }
+
+    if (handled)
+    {
+        mOutfitGalleryMenu->hide();
+    }
+
+    return handled;
+}
+
+void LLOutfitGallery::moveUp()
+{
+    if (mSelectedOutfitUUID.notNull() && mItemsAddedCount > 1)
+    {
+        LLOutfitGalleryItem* item = getSelectedItem();
+        if (item)
+        {
+            S32 n = mItemIndexMap[item];
+            n -= mItemsInRow;
+            if (n >= 0)
+            {
+                item = mIndexToItemMap[n];
+                LLUUID item_id = item->getUUID();
+                ChangeOutfitSelection(nullptr, item_id);
+                item->setFocus(true);
+
+                scrollToShowItem(mSelectedOutfitUUID);
+            }
+        }
+    }
+}
+
+void LLOutfitGallery::moveDown()
+{
+    if (mSelectedOutfitUUID.notNull() && mItemsAddedCount > 1)
+    {
+        LLOutfitGalleryItem* item = getSelectedItem();
+        if (item)
+        {
+            S32 n = mItemIndexMap[item];
+            n += mItemsInRow;
+            if (n < mItemsAddedCount)
+            {
+                item = mIndexToItemMap[n];
+                LLUUID item_id = item->getUUID();
+                ChangeOutfitSelection(nullptr, item_id);
+                item->setFocus(true);
+
+                scrollToShowItem(mSelectedOutfitUUID);
+            }
+        }
+    }
+}
+
+void LLOutfitGallery::moveLeft()
+{
+    if (mSelectedOutfitUUID.notNull() && mItemsAddedCount > 1)
+    {
+        LLOutfitGalleryItem* item = getSelectedItem();
+        if (item)
+        {
+            // Might be better to get item from panel
+            S32 n = mItemIndexMap[item];
+            n--;
+            if (n < 0)
+            {
+                n = mItemsAddedCount - 1;
+            }
+            item = mIndexToItemMap[n];
+            LLUUID item_id = item->getUUID();
+            ChangeOutfitSelection(nullptr, item_id);
+            item->setFocus(true);
+
+            scrollToShowItem(mSelectedOutfitUUID);
+        }
+    }
+}
+
+void LLOutfitGallery::moveRight()
+{
+    if (mSelectedOutfitUUID.notNull() && mItemsAddedCount > 1)
+    {
+        LLOutfitGalleryItem* item = getSelectedItem();
+        if (item)
+        {
+            S32 n = mItemIndexMap[item];
+            n++;
+            if (n == mItemsAddedCount)
+            {
+                n = 0;
+            }
+            item = mIndexToItemMap[n];
+            LLUUID item_id = item->getUUID();
+            ChangeOutfitSelection(nullptr, item_id);
+            item->setFocus(true);
+
+            scrollToShowItem(mSelectedOutfitUUID);
+        }
+    }
+}
+
+void LLOutfitGallery::onFocusLost()
+{
+    LLOutfitListBase::onFocusLost();
+
+    if (mSelectedOutfitUUID.notNull())
+    {
+        LLOutfitGalleryItem* item = getSelectedItem();
+        if (item)
+        {
+            item->setSelected(false);
+        }
+    }
+}
+
+void LLOutfitGallery::onFocusReceived()
+{
+    LLOutfitListBase::onFocusReceived();
+
+    if (mSelectedOutfitUUID.notNull())
+    {
+        LLOutfitGalleryItem* item = getSelectedItem();
+        if (item)
+        {
+            item->setSelected(true);
+        }
+    }
+}
+
+void LLOutfitGallery::onRemoveOutfit(const LLUUID& outfit_cat_id)
+{
+    LLNotificationsUtil::add("DeleteOutfits", LLSD(), LLSD(), boost::bind(onOutfitsRemovalConfirmation, _1, _2, outfit_cat_id));
+}
+
+void LLOutfitGallery::onOutfitsRemovalConfirmation(const LLSD& notification, const LLSD& response, const LLUUID& outfit_cat_id)
+{
+    S32 option = LLNotificationsUtil::getSelectedOption(notification, response);
+    if (option != 0) return; // canceled
+
+    if (outfit_cat_id.notNull())
+    {
+        gInventory.removeCategory(outfit_cat_id);
+    }
+}
+
+void LLOutfitGallery::scrollToShowItem(const LLUUID& item_id)
+{
+    LLOutfitGalleryItem* item = getItem(item_id);
+    if (item)
+    {
+        const LLRect visible_content_rect = mScrollPanel->getVisibleContentRect();
+
+        LLRect item_rect;
+        item->localRectToOtherView(item->getLocalRect(), &item_rect, mScrollPanel);
+        LLRect overlap_rect(item_rect);
+        overlap_rect.intersectWith(visible_content_rect);
+
+        //Scroll when the selected item is outside the visible area
+        if (overlap_rect.getHeight() + 5 < item->getRect().getHeight())
+        {
+            LLRect content_rect = mScrollPanel->getContentWindowRect();
+            LLRect constraint_rect;
+            constraint_rect.setOriginAndSize(0, 0, content_rect.getWidth(), content_rect.getHeight());
+
+            LLRect item_doc_rect;
+            item->localRectToOtherView(item->getLocalRect(), &item_doc_rect, mGalleryPanel);
+
+            mScrollPanel->scrollToShowRect(item_doc_rect, constraint_rect);
+        }
     }
 }
 
@@ -163,7 +420,8 @@ void LLOutfitGallery::updateRowsIfNeeded()
 
 bool compareGalleryItem(LLOutfitGalleryItem* item1, LLOutfitGalleryItem* item2)
 {
-    if(gSavedSettings.getBOOL("OutfitGallerySortByName") ||
+    static LLCachedControl<bool> outfit_gallery_sort_by_name(gSavedSettings, "OutfitGallerySortByName");
+    if(outfit_gallery_sort_by_name ||
             ((item1->isDefaultImage() && item2->isDefaultImage()) || (!item1->isDefaultImage() && !item2->isDefaultImage())))
     {
         std::string name1 = item1->getItemName();
@@ -179,7 +437,6 @@ bool compareGalleryItem(LLOutfitGalleryItem* item1, LLOutfitGalleryItem* item2)
 
 void LLOutfitGallery::reArrangeRows(S32 row_diff)
 {
- 
     std::vector<LLOutfitGalleryItem*> buf_items = mItems;
     for (std::vector<LLOutfitGalleryItem*>::const_reverse_iterator it = buf_items.rbegin(); it != buf_items.rend(); ++it)
     {
@@ -190,17 +447,25 @@ void LLOutfitGallery::reArrangeRows(S32 row_diff)
         buf_items.push_back(*it);
     }
     mHiddenItems.clear();
-    
-    mItemsInRow+= row_diff;
+
+    mItemsInRow += row_diff;
     updateGalleryWidth();
     std::sort(buf_items.begin(), buf_items.end(), compareGalleryItem);
-    
+
+    std::string cur_filter = getFilterSubString();
+    LLStringUtil::toUpper(cur_filter);
+
     for (std::vector<LLOutfitGalleryItem*>::const_iterator it = buf_items.begin(); it != buf_items.end(); ++it)
     {
-    	(*it)->setHidden(false);
-    	applyFilter(*it,sFilterSubString);
-    	addToGallery(*it);
+        std::string outfit_name = (*it)->getItemName();
+        LLStringUtil::toUpper(outfit_name);
+
+        bool hidden = (std::string::npos == outfit_name.find(cur_filter));
+        (*it)->setHidden(hidden);
+
+        addToGallery(*it);
     }
+
     updateMessageVisibility();
 }
 
@@ -264,13 +529,18 @@ LLPanel* LLOutfitGallery::addToRow(LLPanel* row_stack, LLOutfitGalleryItem* item
 
 void LLOutfitGallery::addToGallery(LLOutfitGalleryItem* item)
 {
+    if (!item)
+    {
+        return;
+    }
     if(item->isHidden())
     {
         mHiddenItems.push_back(item);
         return;
     }
+    mItemIndexMap[item] = mItemsAddedCount;
+    mIndexToItemMap[mItemsAddedCount] = item;
     mItemsAddedCount++;
-    mItemIndexMap[item] = mItemsAddedCount - 1;
     int n = mItemsAddedCount;
     int row_count = (n % mItemsInRow) == 0 ? n / mItemsInRow : n / mItemsInRow + 1;
     int n_prev = n - 1;
@@ -306,6 +576,7 @@ void LLOutfitGallery::removeFromGalleryLast(LLOutfitGalleryItem* item)
     int row_count = (n % mItemsInRow) == 0 ? n / mItemsInRow : n / mItemsInRow + 1;
     int row_count_prev = (n_prev % mItemsInRow) == 0 ? n_prev / mItemsInRow : n_prev / mItemsInRow + 1;
     mItemsAddedCount--;
+    mIndexToItemMap.erase(mItemsAddedCount);
 
     bool remove_row = row_count != row_count_prev;
     removeFromLastRow(mItems[mItemsAddedCount]);
@@ -331,6 +602,7 @@ void LLOutfitGallery::removeFromGalleryMiddle(LLOutfitGalleryItem* item)
     }
     int n = mItemIndexMap[item];
     mItemIndexMap.erase(item);
+    mIndexToItemMap.erase(n);
     std::vector<LLOutfitGalleryItem*> saved;
     for (int i = mItemsAddedCount - 1; i > n; i--)
     {
@@ -338,8 +610,8 @@ void LLOutfitGallery::removeFromGalleryMiddle(LLOutfitGalleryItem* item)
         removeFromGalleryLast(mItems[i]);
     }
     removeFromGalleryLast(mItems[n]);
-    int saved_count = saved.size();
-    for (int i = 0; i < saved_count; i++)
+    auto saved_count = saved.size();
+    for (size_t i = 0; i < saved_count; i++)
     {
         addToGallery(saved.back());
         saved.pop_back();
@@ -364,7 +636,23 @@ LLOutfitGalleryItem* LLOutfitGallery::buildGalleryItem(std::string name, LLUUID 
     gitem->setFollowsTop();
     gitem->setOutfitName(name);
     gitem->setUUID(outfit_id);
+    gitem->setGallery(this);
     return gitem;
+}
+
+LLOutfitGalleryItem* LLOutfitGallery::getSelectedItem() const
+{
+    return getItem(mSelectedOutfitUUID);
+}
+
+LLOutfitGalleryItem* LLOutfitGallery::getItem(const LLUUID& id) const
+{
+    auto it = mOutfitMap.find(id);
+    if (it != mOutfitMap.end())
+    {
+        return it->second;
+    }
+    return nullptr;
 }
 
 void LLOutfitGallery::buildGalleryPanel(int row_count)
@@ -440,18 +728,6 @@ void LLOutfitGallery::moveRowPanel(LLPanel* stack, int left, int bottom)
 LLOutfitGallery::~LLOutfitGallery()
 {
     delete mOutfitGalleryMenu;
-    
-    if (gInventory.containsObserver(mTexturesObserver))
-    {
-        gInventory.removeObserver(mTexturesObserver);
-    }
-    delete mTexturesObserver;
-
-    if (gInventory.containsObserver(mOutfitsObserver))
-    {
-        gInventory.removeObserver(mOutfitsObserver);
-    }
-    delete mOutfitsObserver;
 
     while (!mUnusedRowPanels.empty())
     {
@@ -467,36 +743,25 @@ LLOutfitGallery::~LLOutfitGallery()
     }
 }
 
-void LLOutfitGallery::setFilterSubString(const std::string& string)
+// virtual
+void LLOutfitGallery::onFilterSubStringChanged(const std::string& new_string, const std::string& old_string)
 {
-    sFilterSubString = string;
     reArrangeRows();
 }
 
 void LLOutfitGallery::onHighlightBaseOutfit(LLUUID base_id, LLUUID prev_id)
 {
-    if (mOutfitMap[base_id])
+    auto base_it = mOutfitMap.find(base_id);
+    if (base_it != mOutfitMap.end())
     {
-        mOutfitMap[base_id]->setOutfitWorn(true);
+        base_it->second->setOutfitWorn(true);
     }
-    if (mOutfitMap[prev_id])
+
+    auto prev_it = mOutfitMap.find(prev_id);
+    if (prev_it != mOutfitMap.end())
     {
-        mOutfitMap[prev_id]->setOutfitWorn(false);
+        prev_it->second->setOutfitWorn(false);
     }
-}
-
-void LLOutfitGallery::applyFilter(LLOutfitGalleryItem* item, const std::string& filter_substring)
-{
-    if (!item) return;
-
-    std::string outfit_name = item->getItemName();
-    LLStringUtil::toUpper(outfit_name);
-
-    std::string cur_filter = filter_substring;
-    LLStringUtil::toUpper(cur_filter);
-
-    bool hidden = (std::string::npos == outfit_name.find(cur_filter));
-    item->setHidden(hidden);
 }
 
 void LLOutfitGallery::onSetSelectedOutfitByUUID(const LLUUID& outfit_uuid)
@@ -521,6 +786,17 @@ void LLOutfitGallery::updateAddedCategory(LLUUID cat_id)
     LLViewerInventoryCategory *cat = gInventory.getCategory(cat_id);
     if (!cat) return;
 
+    if (!isOutfitFolder(cat))
+    {
+        // Assume a subfolder that contains or will contain outfits, track it
+        const LLUUID outfits = gInventory.findCategoryUUIDForType(LLFolderType::FT_MY_OUTFITS);
+        mCategoriesObserver->addCategory(cat_id, [this, outfits]()
+        {
+            observerCallback(outfits);
+        });
+        return;
+    }
+
     std::string name = cat->getName();
     LLOutfitGalleryItem* item = buildGalleryItem(name, cat_id);
     mOutfitMap.insert(LLOutfitGallery::outfit_map_value_t(cat_id, item));
@@ -537,14 +813,8 @@ void LLOutfitGallery::updateAddedCategory(LLUUID cat_id)
     if (!outfit_category)
         return;
 
-    if (mOutfitsObserver == NULL)
-    {
-        mOutfitsObserver = new LLInventoryCategoriesObserver();
-        gInventory.addObserver(mOutfitsObserver);
-    }
-
     // Start observing changes in "My Outfits" category.
-    mOutfitsObserver->addCategory(cat_id,
+    mCategoriesObserver->addCategory(cat_id,
         boost::bind(&LLOutfitGallery::refreshOutfit, this, cat_id), true);
 
     outfit_category->fetch();
@@ -557,7 +827,7 @@ void LLOutfitGallery::updateRemovedCategory(LLUUID cat_id)
     if (outfits_iter != mOutfitMap.end())
     {
         // 0. Remove category from observer.
-        mOutfitsObserver->removeCategory(cat_id);
+        mCategoriesObserver->removeCategory(cat_id);
 
         //const LLUUID& outfit_id = outfits_iter->first;
         LLOutfitGalleryItem* item = outfits_iter->second;
@@ -609,14 +879,18 @@ void LLOutfitGallery::onChangeOutfitSelection(LLWearableItemsList* list, const L
 {
     if (mSelectedOutfitUUID == category_id)
         return;
-    if (mOutfitMap[mSelectedOutfitUUID])
+
+    auto selected_it = mOutfitMap.find(mSelectedOutfitUUID);
+    if (selected_it != mOutfitMap.end())
     {
-        mOutfitMap[mSelectedOutfitUUID]->setSelected(FALSE);
+        selected_it->second->setSelected(false);
     }
-    if (mOutfitMap[category_id])
+    auto category_it = mOutfitMap.find(category_id);
+    if (category_it != mOutfitMap.end())
     {
-        mOutfitMap[category_id]->setSelected(TRUE);
+        category_it->second->setSelected(true);
     }
+    // mSelectedOutfitUUID will be set in LLOutfitListBase::ChangeOutfitSelection
 }
 
 void LLOutfitGallery::wearSelectedOutfit()
@@ -636,26 +910,27 @@ bool LLOutfitGallery::canWearSelected()
 
 bool LLOutfitGallery::hasDefaultImage(const LLUUID& outfit_cat_id)
 {
-    if (mOutfitMap[outfit_cat_id])
+    auto outfit_it = mOutfitMap.find(outfit_cat_id);
+    if (outfit_it != mOutfitMap.end())
     {
-        return mOutfitMap[outfit_cat_id]->isDefaultImage();
+        return outfit_it->second->isDefaultImage();
     }
     return false;
 }
 
 void LLOutfitGallery::updateMessageVisibility()
 {
-    if(mItems.empty())
+    if (mItems.empty())
     {
-        mMessageTextBox->setVisible(TRUE);
-        mScrollPanel->setVisible(FALSE);
-        std::string message = sFilterSubString.empty()? getString("no_outfits_msg") : getString("no_matched_outfits_msg");
+        mMessageTextBox->setVisible(true);
+        mScrollPanel->setVisible(false);
+        std::string message = getString(getFilterSubString().empty() ? "no_outfits_msg" : "no_matched_outfits_msg");
         mMessageTextBox->setValue(message);
     }
     else
     {
-        mScrollPanel->setVisible(TRUE);
-        mMessageTextBox->setVisible(FALSE);
+        mScrollPanel->setVisible(true);
+        mMessageTextBox->setVisible(false);
     }
 }
 
@@ -668,7 +943,8 @@ static LLDefaultChildRegistry::Register<LLOutfitGalleryItem> r("outfit_gallery_i
 
 LLOutfitGalleryItem::LLOutfitGalleryItem(const Params& p)
     : LLPanel(p),
-    mTexturep(NULL),
+    mGallery(nullptr),
+    mTexturep(nullptr),
     mSelected(false),
     mWorn(false),
     mDefaultImage(true),
@@ -683,8 +959,9 @@ LLOutfitGalleryItem::~LLOutfitGalleryItem()
 
 }
 
-BOOL LLOutfitGalleryItem::postBuild()
+bool LLOutfitGalleryItem::postBuild()
 {
+    mPreviewIcon = getChild<LLIconCtrl>("preview_outfit");
     setDefaultImage();
 
     mOutfitNameText = getChild<LLTextBox>("outfit_name");
@@ -692,43 +969,35 @@ BOOL LLOutfitGalleryItem::postBuild()
     mTextBgPanel = getChild<LLPanel>("text_bg_panel");
     setOutfitWorn(false);
     mHidden = false;
-    return TRUE;
+    return true;
 }
 
 void LLOutfitGalleryItem::draw()
 {
     LLPanel::draw();
-    
-    // Draw border
-    LLUIColor border_color = LLUIColorTable::instance().getColor(mSelected ? "OutfitGalleryItemSelected" : "OutfitGalleryItemUnselected", LLColor4::white);
-    LLRect border = getChildView("preview_outfit")->getRect();
-    border.mRight = border.mRight + 1;
-    gl_rect_2d(border, border_color.get(), FALSE);
 
-    // If the floater is focused, don't apply its alpha to the texture (STORM-677).
-    const F32 alpha = getTransparencyType() == TT_ACTIVE ? 1.0f : getCurrentTransparency();
+    // Draw border
+    static LLUIColor selected_color = LLUIColorTable::instance().getColor("OutfitGalleryItemSelected", LLColor4::white);
+    static LLUIColor unselected_color = LLUIColorTable::instance().getColor("OutfitGalleryItemUnselected", LLColor4::white);
+    const LLColor4& border_color = mSelected ? selected_color : unselected_color;
+    LLRect border = mPreviewIcon->getRect();
+    border.mRight = border.mRight + 1;
+    gl_rect_2d(border, border_color, false);
+
     if (mTexturep)
     {
-        if (mImageUpdatePending && mTexturep->getDiscardLevel() >= 0)
-        {
-            mImageUpdatePending = false;
-            if (mTexturep->getOriginalWidth() > MAX_OUTFIT_PHOTO_WIDTH || mTexturep->getOriginalHeight() > MAX_OUTFIT_PHOTO_HEIGHT)
-            {
-                setDefaultImage();
-            }
-        }
-        else
-        {
-            LLRect interior = border;
-            interior.stretch(-1);
+        LLRect interior = border;
+        interior.stretch(-1);
 
-            gl_draw_scaled_image(interior.mLeft - 1, interior.mBottom, interior.getWidth(), interior.getHeight(), mTexturep, UI_VERTEX_COLOR % alpha);
+        // Pump the priority
+        const F32 stats = (F32)llmin(interior.getWidth() * interior.getHeight(), MAX_OUTFIT_PHOTO_LOAD_WIDTH * MAX_OUTFIT_PHOTO_LOAD_HEIGHT);
+        mTexturep->addTextureStats(stats);
 
-            // Pump the priority
-            mTexturep->addTextureStats((F32)(interior.getWidth() * interior.getHeight()));
-        }
+        // If the floater is focused, don't apply its alpha to the texture (STORM-677).
+        const F32 alpha = getTransparencyType() == TT_ACTIVE ? 1.0f : getCurrentTransparency();
+        gl_draw_scaled_image(interior.mLeft - 1, interior.mBottom, interior.getWidth(), interior.getHeight(), mTexturep, UI_VERTEX_COLOR % alpha);
     }
-    
+
 }
 
 void LLOutfitGalleryItem::setOutfitName(std::string name)
@@ -743,10 +1012,13 @@ void LLOutfitGalleryItem::setOutfitWorn(bool value)
     mWorn = value;
     LLStringUtil::format_map_t worn_string_args;
     std::string worn_string = getString("worn_string", worn_string_args);
-    LLUIColor text_color = LLUIColorTable::instance().getColor(mSelected ? "White" : (mWorn ? "OutfitGalleryItemWorn" : "White"), LLColor4::white);
-    mOutfitWornText->setReadOnlyColor(text_color.get());
-    mOutfitNameText->setReadOnlyColor(text_color.get());
+    LLUIColor text_color = LLUIColorTable::instance().getColor("White", LLColor4::white);
+    mOutfitWornText->setReadOnlyColor(text_color);
+    mOutfitNameText->setReadOnlyColor(text_color);
+    mOutfitWornText->setFont(value ? LLFontGL::getFontSansSerifBold() : LLFontGL::getFontSansSerifSmall());
+    mOutfitNameText->setFont(value ? LLFontGL::getFontSansSerifBold() : LLFontGL::getFontSansSerifSmall());
     mOutfitWornText->setValue(value ? worn_string : "");
+    mOutfitNameText->setText(mOutfitName); // refresh LLTextViewModel to pick up font changes
 }
 
 void LLOutfitGalleryItem::setSelected(bool value)
@@ -756,22 +1028,77 @@ void LLOutfitGalleryItem::setSelected(bool value)
     setOutfitWorn(mWorn);
 }
 
-BOOL LLOutfitGalleryItem::handleMouseDown(S32 x, S32 y, MASK mask)
+bool LLOutfitGalleryItem::handleMouseDown(S32 x, S32 y, MASK mask)
 {
-    setFocus(TRUE);
+    setFocus(true);
     return LLUICtrl::handleMouseDown(x, y, mask);
 }
 
-BOOL LLOutfitGalleryItem::handleRightMouseDown(S32 x, S32 y, MASK mask)
+bool LLOutfitGalleryItem::handleRightMouseDown(S32 x, S32 y, MASK mask)
 {
-    setFocus(TRUE);
+    setFocus(true);
     return LLUICtrl::handleRightMouseDown(x, y, mask);
 }
 
-BOOL LLOutfitGalleryItem::handleDoubleClick(S32 x, S32 y, MASK mask)
+bool LLOutfitGalleryItem::handleDoubleClick(S32 x, S32 y, MASK mask)
+{
+    return openOutfitsContent() || LLPanel::handleDoubleClick(x, y, mask);
+}
+
+bool LLOutfitGalleryItem::handleKeyHere(KEY key, MASK mask)
+{
+    if (!mGallery)
+    {
+        return false;
+    }
+
+    bool handled = false;
+    switch (key)
+    {
+        case KEY_LEFT:
+            mGallery->moveLeft();
+            handled = true;
+            break;
+
+        case KEY_RIGHT:
+            mGallery->moveRight();
+            handled = true;
+            break;
+
+        case KEY_UP:
+            mGallery->moveUp();
+            handled = true;
+            break;
+
+        case KEY_DOWN:
+            mGallery->moveDown();
+            handled = true;
+            break;
+
+        default:
+            break;
+    }
+    return handled;
+}
+
+void LLOutfitGalleryItem::onFocusLost()
+{
+    setSelected(false);
+
+    LLPanel::onFocusLost();
+}
+
+void LLOutfitGalleryItem::onFocusReceived()
+{
+    setSelected(true);
+
+    LLPanel::onFocusReceived();
+}
+
+bool LLOutfitGalleryItem::openOutfitsContent()
 {
     LLTabContainer* appearence_tabs = LLPanelOutfitsInventory::findInstance()->getChild<LLTabContainer>("appearance_tabs");
-    if (appearence_tabs && (mUUID != LLUUID()))
+    if (appearence_tabs && mUUID.notNull())
     {
         appearence_tabs->selectTabByName("outfitslist_tab");
         LLPanel* panel = appearence_tabs->getCurrentPanel();
@@ -783,25 +1110,31 @@ BOOL LLOutfitGalleryItem::handleDoubleClick(S32 x, S32 y, MASK mask)
             {
                 outfit_list->setSelectedOutfitByUUID(mUUID);
                 LLAccordionCtrlTab* tab = accordion->getSelectedTab();
-                tab->showAndFocusHeader();
-                return TRUE;
+                if (tab)
+                {
+                    tab->showAndFocusHeader();
+                    return true;
+                }
             }
         }
     }
-
-    return LLPanel::handleDoubleClick(x, y, mask);
+    return false;
 }
 
 bool LLOutfitGalleryItem::setImageAssetId(LLUUID image_asset_id)
 {
-    LLPointer<LLViewerFetchedTexture> texture = LLViewerTextureManager::getFetchedTexture(image_asset_id, FTT_DEFAULT, MIPMAP_YES, LLGLTexture::BOOST_NONE, LLViewerTexture::LOD_TEXTURE);
-    if (texture && texture->getOriginalWidth() <= MAX_OUTFIT_PHOTO_WIDTH && texture->getOriginalHeight() <= MAX_OUTFIT_PHOTO_HEIGHT)
+    LLPointer<LLViewerFetchedTexture> texture = LLViewerTextureManager::getFetchedTexture(image_asset_id, FTT_DEFAULT, MIPMAP_YES, LLGLTexture::BOOST_NONE, LLViewerTexture::FETCHED_TEXTURE);
+    if (texture)
     {
         mImageAssetId = image_asset_id;
         mTexturep = texture;
-        getChildView("preview_outfit")->setVisible(FALSE);
+        // *TODO: There was previously logic which attempted to toggle
+        // visibility of the preview icon based on certain conditions,
+        // however these conditions either did not make sense or were not
+        // applicable due to texture streaming. Maybe we should only hide
+        // the preview icon if the texture has at least one mip loaded.
+        mPreviewIcon->setVisible(false);
         mDefaultImage = false;
-        mImageUpdatePending = (texture->getDiscardLevel() == -1);
         return true;
     }
     return false;
@@ -816,9 +1149,8 @@ void LLOutfitGalleryItem::setDefaultImage()
 {
     mTexturep = NULL;
     mImageAssetId.setNull();
-    getChildView("preview_outfit")->setVisible(TRUE);
+    mPreviewIcon->setVisible(true);
     mDefaultImage = true;
-    mImageUpdatePending = false;
 }
 
 LLContextMenu* LLOutfitGalleryContextMenu::createMenu()
@@ -826,7 +1158,7 @@ LLContextMenu* LLOutfitGalleryContextMenu::createMenu()
     LLUICtrl::CommitCallbackRegistry::ScopedRegistrar registrar;
     LLUICtrl::EnableCallbackRegistry::ScopedRegistrar enable_registrar;
     LLUUID selected_id = mUUIDs.front();
-    
+
     registrar.add("Outfit.WearReplace",
                   boost::bind(&LLAppearanceMgr::replaceCurrentOutfit, &LLAppearanceMgr::instance(), selected_id));
     registrar.add("Outfit.WearAdd",
@@ -835,69 +1167,14 @@ LLContextMenu* LLOutfitGalleryContextMenu::createMenu()
                   boost::bind(&LLAppearanceMgr::takeOffOutfit, &LLAppearanceMgr::instance(), selected_id));
     registrar.add("Outfit.Edit", boost::bind(editOutfit));
     registrar.add("Outfit.Rename", boost::bind(renameOutfit, selected_id));
-    registrar.add("Outfit.Delete", boost::bind(&LLOutfitGalleryContextMenu::onRemoveOutfit, this, selected_id));
+    registrar.add("Outfit.Delete", boost::bind(LLOutfitGallery::onRemoveOutfit, selected_id));
     registrar.add("Outfit.Create", boost::bind(&LLOutfitGalleryContextMenu::onCreate, this, _2));
-    registrar.add("Outfit.UploadPhoto", boost::bind(&LLOutfitGalleryContextMenu::onUploadPhoto, this, selected_id));
-    registrar.add("Outfit.SelectPhoto", boost::bind(&LLOutfitGalleryContextMenu::onSelectPhoto, this, selected_id));
-    registrar.add("Outfit.TakeSnapshot", boost::bind(&LLOutfitGalleryContextMenu::onTakeSnapshot, this, selected_id));
-    registrar.add("Outfit.RemovePhoto", boost::bind(&LLOutfitGalleryContextMenu::onRemovePhoto, this, selected_id));
+    registrar.add("Outfit.Thumbnail", boost::bind(&LLOutfitGalleryContextMenu::onThumbnail, this, selected_id));
+    registrar.add("Outfit.Save", boost::bind(&LLOutfitGalleryContextMenu::onSave, this, selected_id));
     enable_registrar.add("Outfit.OnEnable", boost::bind(&LLOutfitGalleryContextMenu::onEnable, this, _2));
     enable_registrar.add("Outfit.OnVisible", boost::bind(&LLOutfitGalleryContextMenu::onVisible, this, _2));
-    
+
     return createFromFile("menu_gallery_outfit_tab.xml");
-}
-
-void LLOutfitGalleryContextMenu::onUploadPhoto(const LLUUID& outfit_cat_id)
-{
-    LLOutfitGallery* gallery = dynamic_cast<LLOutfitGallery*>(mOutfitList);
-    if (gallery && outfit_cat_id.notNull())
-    {
-        gallery->uploadPhoto(outfit_cat_id);
-    }
-}
-
-void LLOutfitGalleryContextMenu::onSelectPhoto(const LLUUID& outfit_cat_id)
-{
-    LLOutfitGallery* gallery = dynamic_cast<LLOutfitGallery*>(mOutfitList);
-    if (gallery && outfit_cat_id.notNull())
-    {
-        gallery->onSelectPhoto(outfit_cat_id);
-    }
-}
-
-void LLOutfitGalleryContextMenu::onRemovePhoto(const LLUUID& outfit_cat_id)
-{
-    LLOutfitGallery* gallery = dynamic_cast<LLOutfitGallery*>(mOutfitList);
-    if (gallery && outfit_cat_id.notNull())
-    {
-        gallery->checkRemovePhoto(outfit_cat_id);
-        gallery->refreshOutfit(outfit_cat_id);
-    }
-}
-
-void LLOutfitGalleryContextMenu::onTakeSnapshot(const LLUUID& outfit_cat_id)
-{
-    LLOutfitGallery* gallery = dynamic_cast<LLOutfitGallery*>(mOutfitList);
-    if (gallery && outfit_cat_id.notNull())
-    {
-        gallery->onTakeSnapshot(outfit_cat_id);
-    }
-}
-
-void LLOutfitGalleryContextMenu::onRemoveOutfit(const LLUUID& outfit_cat_id)
-{
-    LLNotificationsUtil::add("DeleteOutfits", LLSD(), LLSD(), boost::bind(&LLOutfitGalleryContextMenu::onOutfitsRemovalConfirmation, this, _1, _2, outfit_cat_id));
-}
-
-void LLOutfitGalleryContextMenu::onOutfitsRemovalConfirmation(const LLSD& notification, const LLSD& response, const LLUUID& outfit_cat_id)
-{
-    S32 option = LLNotificationsUtil::getSelectedOption(notification, response);
-    if (option != 0) return; // canceled
-    
-    if (outfit_cat_id.notNull())
-    {
-        gInventory.removeCategory(outfit_cat_id);
-    }
 }
 
 void LLOutfitGalleryContextMenu::onCreate(const LLSD& data)
@@ -908,7 +1185,7 @@ void LLOutfitGalleryContextMenu::onCreate(const LLSD& data)
         LL_WARNS() << "Invalid wearable type" << LL_ENDL;
         return;
     }
-    
+
     LLAgentWearables::createWearable(type, true);
 }
 
@@ -919,16 +1196,6 @@ bool LLOutfitGalleryContextMenu::onEnable(LLSD::String param)
 
 bool LLOutfitGalleryContextMenu::onVisible(LLSD::String param)
 {
-	mMenuHandle.get()->getChild<LLUICtrl>("upload_photo")->setLabelArg("[UPLOAD_COST]", std::to_string(LLAgentBenefitsMgr::current().getTextureUploadCost()));
-    if ("remove_photo" == param)
-    {
-        LLOutfitGallery* gallery = dynamic_cast<LLOutfitGallery*>(mOutfitList);
-        LLUUID selected_id = mUUIDs.front();
-        if (gallery && selected_id.notNull())
-        {
-            return !gallery->hasDefaultImage(selected_id);
-        }
-    }
     return LLOutfitContextMenu::onVisible(param);
 }
 
@@ -941,56 +1208,12 @@ void LLOutfitGalleryGearMenu::onUpdateItemsVisibility()
 {
     if (!mMenu) return;
     bool have_selection = getSelectedOutfitID().notNull();
-    mMenu->setItemVisible("expand", FALSE);
-    mMenu->setItemVisible("collapse", FALSE);
-    mMenu->setItemVisible("upload_photo", have_selection);
-    mMenu->setItemVisible("select_photo", have_selection);
-    mMenu->setItemVisible("take_snapshot", have_selection);
-    mMenu->setItemVisible("remove_photo", !hasDefaultImage());
-    mMenu->setItemVisible("sepatator3", TRUE);
-    mMenu->setItemVisible("sort_folders_by_name", TRUE);
+    mMenu->setItemVisible("expand", false);
+    mMenu->setItemVisible("collapse", false);
+    mMenu->setItemVisible("thumbnail", have_selection);
+    mMenu->setItemVisible("sepatator3", true);
+    mMenu->setItemVisible("sort_folders_by_name", true);
     LLOutfitListGearMenuBase::onUpdateItemsVisibility();
-}
-
-void LLOutfitGalleryGearMenu::onUploadFoto()
-{
-    LLUUID selected_outfit_id = getSelectedOutfitID();
-    LLOutfitGallery* gallery = dynamic_cast<LLOutfitGallery*>(mOutfitList);
-    if (gallery && selected_outfit_id.notNull())
-    {
-        gallery->uploadPhoto(selected_outfit_id);
-    }
-}
-
-void LLOutfitGalleryGearMenu::onSelectPhoto()
-{
-    LLOutfitGallery* gallery = dynamic_cast<LLOutfitGallery*>(mOutfitList);
-    LLUUID selected_outfit_id = getSelectedOutfitID();
-    if (gallery && !selected_outfit_id.isNull())
-    {
-        gallery->onSelectPhoto(selected_outfit_id);
-    }
-}
-
-void LLOutfitGalleryGearMenu::onRemovePhoto()
-{
-    LLOutfitGallery* gallery = dynamic_cast<LLOutfitGallery*>(mOutfitList);
-    LLUUID selected_outfit_id = getSelectedOutfitID();
-    if (gallery && !selected_outfit_id.isNull())
-    {
-        gallery->checkRemovePhoto(selected_outfit_id);
-        gallery->refreshOutfit(selected_outfit_id);
-    }
-}
-
-void LLOutfitGalleryGearMenu::onTakeSnapshot()
-{
-    LLOutfitGallery* gallery = dynamic_cast<LLOutfitGallery*>(mOutfitList);
-    LLUUID selected_outfit_id = getSelectedOutfitID();
-    if (gallery && !selected_outfit_id.isNull())
-    {
-        gallery->onTakeSnapshot(selected_outfit_id);
-    }
 }
 
 void LLOutfitGalleryGearMenu::onChangeSortOrder()
@@ -1019,240 +1242,105 @@ void LLOutfitGallery::onTextureSelectionChanged(LLInventoryItem* itemp)
 {
 }
 
-void LLOutfitGallery::loadPhotos()
-{
-    //Iterate over inventory
-    mSnapshotFolderID = gInventory.findUserDefinedCategoryUUIDForType(LLFolderType::FT_TEXTURE);
-    LLViewerInventoryCategory* textures_category = gInventory.getCategory(mSnapshotFolderID);
-    if (!textures_category)
-        return;
-    if (mTexturesObserver == NULL)
-    {
-        mTexturesObserver = new LLInventoryCategoriesObserver();
-        gInventory.addObserver(mTexturesObserver);
-    }
-
-    // Start observing changes in "Textures" category.
-    mTexturesObserver->addCategory(mSnapshotFolderID,
-        boost::bind(&LLOutfitGallery::refreshTextures, this, mSnapshotFolderID));
-
-    textures_category->fetch();
-}
-
-void LLOutfitGallery::updateSnapshotFolderObserver()
-{
-    if(mSnapshotFolderID != gInventory.findUserDefinedCategoryUUIDForType(LLFolderType::FT_TEXTURE))
-    {
-        if (gInventory.containsObserver(mTexturesObserver))
-        {
-            gInventory.removeObserver(mTexturesObserver);
-        }
-        delete mTexturesObserver;
-        mTexturesObserver = NULL;
-        loadPhotos();
-    }
-}
-
 void LLOutfitGallery::refreshOutfit(const LLUUID& category_id)
 {
     LLViewerInventoryCategory* category = gInventory.getCategory(category_id);
     if (category)
     {
         bool photo_loaded = false;
-        LLInventoryModel::cat_array_t sub_cat_array;
-        LLInventoryModel::item_array_t outfit_item_array;
-        // Collect all sub-categories of a given category.
-        gInventory.collectDescendents(
-            category->getUUID(),
-            sub_cat_array,
-            outfit_item_array,
-            LLInventoryModel::EXCLUDE_TRASH);
-        BOOST_FOREACH(LLViewerInventoryItem* outfit_item, outfit_item_array)
+        LLUUID asset_id = category->getThumbnailUUID();
+        if (asset_id.isNull())
         {
-            LLViewerInventoryItem* linked_item = outfit_item->getLinkedItem();
-            LLUUID asset_id, inv_id;
-            std::string item_name;
-            if (linked_item != NULL)
+            LLInventoryModel::cat_array_t sub_cat_array;
+            LLInventoryModel::item_array_t outfit_item_array;
+            // Collect all sub-categories of a given category.
+            gInventory.collectDescendents(
+                category->getUUID(),
+                sub_cat_array,
+                outfit_item_array,
+                LLInventoryModel::EXCLUDE_TRASH);
+            for (LLViewerInventoryItem* outfit_item : outfit_item_array)
             {
-                if (linked_item->getActualType() == LLAssetType::AT_TEXTURE)
+                LLViewerInventoryItem* linked_item = outfit_item->getLinkedItem();
+                LLUUID asset_id, inv_id;
+                std::string item_name;
+                if (linked_item != NULL)
                 {
-                    asset_id = linked_item->getAssetUUID();
-                    inv_id = linked_item->getUUID();
-                    item_name = linked_item->getName();
-                }
-            }
-            else if (outfit_item->getActualType() == LLAssetType::AT_TEXTURE)
-            {
-                asset_id = outfit_item->getAssetUUID();
-                inv_id = outfit_item->getUUID();
-                item_name = outfit_item->getName();
-            }
-            if (asset_id.notNull())
-            {
-                photo_loaded |= mOutfitMap[category_id]->setImageAssetId(asset_id);
-                // Rename links
-                if (!mOutfitRenamePending.isNull() && mOutfitRenamePending.asString() == item_name)
-                {
-                    LLViewerInventoryCategory *outfit_cat = gInventory.getCategory(mOutfitRenamePending);
-                    LLStringUtil::format_map_t photo_string_args;
-                    photo_string_args["OUTFIT_NAME"] = outfit_cat->getName();
-                    std::string new_name = getString("outfit_photo_string", photo_string_args);
-                    LLSD updates;
-                    updates["name"] = new_name;
-                    update_inventory_item(inv_id, updates, NULL);
-                    mOutfitRenamePending.setNull();
-                    LLFloater* appearance_floater = LLFloaterReg::getInstance("appearance");
-                    if (appearance_floater)
+                    if (linked_item->getActualType() == LLAssetType::AT_TEXTURE)
                     {
-                        appearance_floater->setFocus(TRUE);
+                        asset_id = linked_item->getAssetUUID();
+                        inv_id = linked_item->getUUID();
+                        item_name = linked_item->getName();
                     }
                 }
-                if (item_name == LLAppearanceMgr::sExpectedTextureName)
+                else if (outfit_item->getActualType() == LLAssetType::AT_TEXTURE)
                 {
-                    // Images with "appropriate" name take priority
-                    break;
+                    asset_id = outfit_item->getAssetUUID();
+                    inv_id = outfit_item->getUUID();
+                    item_name = outfit_item->getName();
+                }
+                if (category->getThumbnailUUID().notNull())
+                {
+                    asset_id = category->getThumbnailUUID();
+                }
+                if (asset_id.notNull())
+                {
+                    LLOutfitGalleryItem* item = getItem(category_id);
+                    if (item)
+                    {
+                        photo_loaded |= item->setImageAssetId(asset_id);
+                    }
+                    else
+                    {
+                        photo_loaded = true;
+                    }
+                    // Rename links
+                    if (!mOutfitRenamePending.isNull() && mOutfitRenamePending.asString() == item_name)
+                    {
+                        LLViewerInventoryCategory *outfit_cat = gInventory.getCategory(mOutfitRenamePending);
+                        LLStringUtil::format_map_t photo_string_args;
+                        photo_string_args["OUTFIT_NAME"] = outfit_cat->getName();
+                        std::string new_name = getString("outfit_photo_string", photo_string_args);
+                        LLSD updates;
+                        updates["name"] = new_name;
+                        update_inventory_item(inv_id, updates, NULL);
+                        mOutfitRenamePending.setNull();
+                        LLFloater* appearance_floater = LLFloaterReg::getInstance("appearance");
+                        if (appearance_floater)
+                        {
+                            appearance_floater->setFocus(true);
+                        }
+                    }
+                    if (item_name == LLAppearanceMgr::sExpectedTextureName)
+                    {
+                        // Images with "appropriate" name take priority
+                        break;
+                    }
+                }
+                if (!photo_loaded)
+                {
+                    LLOutfitGalleryItem* item = getItem(category_id);
+                    if (item)
+                    {
+                        item->setDefaultImage();
+                    }
                 }
             }
-            if (!photo_loaded)
+        }
+        else
+        {
+            LLOutfitGalleryItem* item = getItem(category_id);
+            if (item)
             {
-                mOutfitMap[category_id]->setDefaultImage();
+                item->setImageAssetId(asset_id);
             }
         }
     }
-    
+
     if (mGalleryCreated && !LLApp::isExiting())
     {
         reArrangeRows();
     }
-}
-
-// Refresh linked textures from "textures" uploads folder
-void LLOutfitGallery::refreshTextures(const LLUUID& category_id)
-{
-    LLInventoryModel::cat_array_t cat_array;
-    LLInventoryModel::item_array_t item_array;
-
-    // Collect all sub-categories of a given category.
-    LLIsType is_texture(LLAssetType::AT_TEXTURE);
-    gInventory.collectDescendentsIf(
-        category_id,
-        cat_array,
-        item_array,
-        LLInventoryModel::EXCLUDE_TRASH,
-        is_texture);
-
-    //Find texture which contain pending outfit ID string in name
-    LLViewerInventoryItem* photo_upload_item = NULL;
-    BOOST_FOREACH(LLViewerInventoryItem* item, item_array)
-    {
-        std::string name = item->getName();
-        if (!mOutfitLinkPending.isNull() && name == mOutfitLinkPending.asString())
-        {
-            photo_upload_item = item;
-            break;
-        }
-    }
-
-    if (photo_upload_item != NULL)
-    {
-        LLUUID photo_item_id = photo_upload_item->getUUID();
-        LLInventoryObject* upload_object = gInventory.getObject(photo_item_id);
-        if (!upload_object)
-        {
-            LL_WARNS() << "LLOutfitGallery::refreshTextures added_object is null!" << LL_ENDL;
-        }
-        else
-        {
-            linkPhotoToOutfit(photo_item_id, mOutfitLinkPending);
-            mOutfitRenamePending = mOutfitLinkPending;
-            mOutfitLinkPending.setNull();
-        }
-    }
-}
-
-void LLOutfitGallery::uploadPhoto(LLUUID outfit_id)
-{
-	outfit_map_t::iterator outfit_it = mOutfitMap.find(outfit_id);
-	if (outfit_it == mOutfitMap.end() || outfit_it->first.isNull())
-	{
-		return;
-	}
-    (new LLFilePickerReplyThread(boost::bind(&LLOutfitGallery::uploadOutfitImage, this, _1, outfit_id), LLFilePicker::FFLOAD_IMAGE, false))->getFile();
-}
-
-void LLOutfitGallery::uploadOutfitImage(const std::vector<std::string>& filenames, LLUUID outfit_id)
-{
-    std::string filename = filenames[0];
-    LLLocalBitmap* unit = new LLLocalBitmap(filename);
-    if (unit->getValid())
-    {
-        std::string exten = gDirUtilp->getExtension(filename);
-        U32 codec = LLImageBase::getCodecFromExtension(exten);
-
-        LLImageDimensionsInfo image_info;
-        std::string image_load_error;
-        if (!image_info.load(filename, codec))
-        {
-            image_load_error = image_info.getLastError();
-        }
-
-        S32 max_width = MAX_OUTFIT_PHOTO_WIDTH;
-        S32 max_height = MAX_OUTFIT_PHOTO_HEIGHT;
-
-        if ((image_info.getWidth() > max_width) || (image_info.getHeight() > max_height))
-        {
-            LLStringUtil::format_map_t args;
-            args["WIDTH"] = llformat("%d", max_width);
-            args["HEIGHT"] = llformat("%d", max_height);
-
-            image_load_error = LLTrans::getString("outfit_photo_load_dimensions_error", args);
-        }
-
-        if (!image_load_error.empty())
-        {
-            LLSD subst;
-            subst["REASON"] = image_load_error;
-            LLNotificationsUtil::add("OutfitPhotoLoadError", subst);
-            return;
-        }
-
-        S32 expected_upload_cost = LLAgentBenefitsMgr::current().getTextureUploadCost();
-        void *nruserdata = NULL;
-        nruserdata = (void *)&outfit_id;
-
-        LLViewerInventoryCategory *outfit_cat = gInventory.getCategory(outfit_id);
-        if (!outfit_cat) return;
-        updateSnapshotFolderObserver();
-        checkRemovePhoto(outfit_id);
-        std::string upload_pending_name = outfit_id.asString();
-        std::string upload_pending_desc = "";
-        upload_new_resource(filename, // file
-            upload_pending_name,
-            upload_pending_desc,
-            0, LLFolderType::FT_NONE, LLInventoryType::IT_NONE,
-            LLFloaterPerms::getNextOwnerPerms("Uploads"),
-            LLFloaterPerms::getGroupPerms("Uploads"),
-            LLFloaterPerms::getEveryonePerms("Uploads"),
-            upload_pending_name, LLAssetStorage::LLStoreAssetCallback(), expected_upload_cost, nruserdata, false);
-        mOutfitLinkPending = outfit_id;
-    }
-    delete unit;
-}
-
-void LLOutfitGallery::linkPhotoToOutfit(LLUUID photo_id, LLUUID outfit_id)
-{
-    LLPointer<LLInventoryCallback> cb = new LLUpdateGalleryOnPhotoLinked();
-    link_inventory_object(outfit_id, photo_id, cb);
-}
-
-bool LLOutfitGallery::checkRemovePhoto(LLUUID outfit_id)
-{
-    LLAppearanceMgr::instance().removeOutfitPhoto(outfit_id);
-    return true;
-}
-
-void LLUpdateGalleryOnPhotoLinked::fire(const LLUUID& inv_item_id)
-{
 }
 
 LLUUID LLOutfitGallery::getPhotoAssetId(const LLUUID& outfit_id)
@@ -1270,151 +1358,3 @@ LLUUID LLOutfitGallery::getDefaultPhoto()
     return LLUUID();
 }
 
-void LLOutfitGallery::onTexturePickerCommit(LLTextureCtrl::ETexturePickOp op, LLUUID id)
-{
-    LLUUID selected_outfit_id = getSelectedOutfitUUID();
-
-    if (selected_outfit_id.isNull())
-    {
-        return;
-    }
-
-    LLFloaterTexturePicker* floaterp = (LLFloaterTexturePicker*)mFloaterHandle.get();
-
-    if (floaterp && op == LLTextureCtrl::TEXTURE_SELECT)
-    {
-        LLUUID image_item_id;
-        if (id.notNull())
-        {
-            image_item_id = id;
-        }
-        else
-        {
-            image_item_id = floaterp->findItemID(floaterp->getAssetID(), FALSE, TRUE);
-            if (image_item_id.isNull())
-            {
-                LL_WARNS() << "id or image_item_id is NULL!" << LL_ENDL;
-                return;
-            }
-        }
-
-        std::string image_load_error;
-        S32 max_width = MAX_OUTFIT_PHOTO_WIDTH;
-        S32 max_height = MAX_OUTFIT_PHOTO_HEIGHT;
-        if (mTextureSelected.isNull() ||
-            mTextureSelected->getFullWidth() == 0 ||
-            mTextureSelected->getFullHeight() == 0)
-        {
-            image_load_error = LLTrans::getString("outfit_photo_verify_dimensions_error");
-            LL_WARNS() << "Cannot verify selected texture dimensions" << LL_ENDL;
-            return;
-        }
-        S32 width = mTextureSelected->getFullWidth();
-        S32 height = mTextureSelected->getFullHeight();
-        if ((width > max_width) || (height > max_height))
-        {
-            LLStringUtil::format_map_t args;
-            args["WIDTH"] = llformat("%d", max_width);
-            args["HEIGHT"] = llformat("%d", max_height);
-
-            image_load_error = LLTrans::getString("outfit_photo_select_dimensions_error", args);
-        }
-
-        if (!image_load_error.empty())
-        {
-            LLSD subst;
-            subst["REASON"] = image_load_error;
-            LLNotificationsUtil::add("OutfitPhotoLoadError", subst);
-            return;
-        }
-
-        checkRemovePhoto(selected_outfit_id);
-        linkPhotoToOutfit(image_item_id, selected_outfit_id);
-    }
-}
-
-void LLOutfitGallery::onSelectPhoto(LLUUID selected_outfit_id)
-{
-    if (selected_outfit_id.notNull())
-    {
-
-        // show hourglass cursor when loading inventory window
-        // because inventory construction is slooow
-        getWindow()->setCursor(UI_CURSOR_WAIT);
-        LLFloater* floaterp = mFloaterHandle.get();
-
-        // Show the dialog
-        if (floaterp)
-        {
-            floaterp->openFloater();
-        }
-        else
-        {
-            floaterp = new LLFloaterTexturePicker(
-                this,
-                getPhotoAssetId(selected_outfit_id),
-                getPhotoAssetId(selected_outfit_id),
-                getPhotoAssetId(selected_outfit_id),
-                FALSE,
-                TRUE,
-                "SELECT PHOTO",
-                PERM_NONE,
-                PERM_NONE,
-                PERM_NONE,
-                FALSE,
-                NULL);
-
-            mFloaterHandle = floaterp->getHandle();
-            mTextureSelected = NULL;
-
-            LLFloaterTexturePicker* texture_floaterp = dynamic_cast<LLFloaterTexturePicker*>(floaterp);
-            if (texture_floaterp)
-            {
-                texture_floaterp->setTextureSelectedCallback(boost::bind(&LLOutfitGallery::onTextureSelectionChanged, this, _1));
-                texture_floaterp->setOnFloaterCommitCallback(boost::bind(&LLOutfitGallery::onTexturePickerCommit, this, _1, _2));
-                texture_floaterp->setOnUpdateImageStatsCallback(boost::bind(&LLOutfitGallery::onTexturePickerUpdateImageStats, this, _1));
-                texture_floaterp->setLocalTextureEnabled(FALSE);
-                texture_floaterp->setBakeTextureEnabled(FALSE);
-                texture_floaterp->setCanApply(false, true);
-            }
-
-            floaterp->openFloater();
-        }
-        floaterp->setFocus(TRUE);
-    }
-}
-
-void LLOutfitGallery::onTakeSnapshot(LLUUID selected_outfit_id)
-{
-    LLFloaterReg::toggleInstanceOrBringToFront("simple_outfit_snapshot");
-    LLFloaterSimpleOutfitSnapshot* snapshot_floater = LLFloaterSimpleOutfitSnapshot::getInstance();
-    if (snapshot_floater)
-    {
-        snapshot_floater->setOutfitID(selected_outfit_id);
-        snapshot_floater->getInstance()->setGallery(this);
-    }
-}
-
-void LLOutfitGallery::onBeforeOutfitSnapshotSave()
-{
-    LLUUID selected_outfit_id = getSelectedOutfitUUID();
-    if (!selected_outfit_id.isNull())
-    {
-        checkRemovePhoto(selected_outfit_id);
-        updateSnapshotFolderObserver();
-    }
-}
-
-void LLOutfitGallery::onAfterOutfitSnapshotSave()
-{
-    LLUUID selected_outfit_id = getSelectedOutfitUUID();
-    if (!selected_outfit_id.isNull())
-    {
-        mOutfitLinkPending = selected_outfit_id;
-    }
-}
-
-void LLOutfitGallery::onTexturePickerUpdateImageStats(LLPointer<LLViewerTexture> texture)
-{
-    mTextureSelected = texture;
-}

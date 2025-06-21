@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <menu_bar
  bg_visible="false"
  follows="left|top|right"
@@ -63,6 +63,14 @@
         <menu_item_call.on_click
          function="Floater.ToggleOrBringToFront"
          parameter="camera" />
+      </menu_item_call>
+      <menu_item_call
+       label="Notifications..."
+       name="Notifications"
+       shortcut="alt|shift|N">
+        <menu_item_call.on_click
+         function="Floater.ToggleOrBringToFront"
+         parameter="notification_well_window" />
       </menu_item_call>
 
       <menu_item_separator/>
@@ -391,6 +399,16 @@
            function="Self.EnableRemoveAllAttachments" />
         </menu_item_call>
       </menu>
+      <menu_item_call
+       label="Remove selected attachments"
+       layout="topleft"
+       name="Remove Selected Attachments"
+       shortcut="alt|shift|R">
+        <menu_item_call.on_click
+         function="Attachment.Detach" />
+        <menu_item_call.on_enable
+         function="Attachment.EnableDetach" />
+      </menu_item_call>
       <menu_item_separator/>
       <menu_item_call
         label="Complete avatars..."
@@ -465,7 +483,7 @@
        layout="topleft"
        name="Reset Skeleton">
         <menu_item_call.on_click
-         function="Avatar.ResetSkeleton" />
+         function="Avatar.ResetSelfSkeleton" />
       </menu_item_call>
       <menu_item_call 
        label="Reset skeleton and animations"
@@ -487,7 +505,7 @@
      name="Help with avatars">
         <menu_item_call.on_click
             function="Advanced.ShowURL"
-            parameter="https://community.secondlife.com/search/?type=cms_records3&amp;tags=avatar&amp;nodes=30&amp;search_and_or=or"/>
+            parameter="https://community.secondlife.com/knowledgebase/english/controlling-your-avatars-appearance-r216/"/>
       </menu_item_call>
     </menu>
     <menu
@@ -543,42 +561,6 @@
              parameter="conversation" />
         </menu_item_check>
         <menu_item_separator/>
-        <menu
-         label="Voice morphing"
-         name="VoiceMorphing"
-         visibility_control="VoiceMorphingEnabled">
-            <menu_item_check
-             label="No voice morphing"
-             name="NoVoiceMorphing">
-                <menu_item_check.on_check
-                 function="Communicate.VoiceMorphing.NoVoiceMorphing.Check" />
-                <menu_item_check.on_click
-                 function="Communicate.VoiceMorphing.NoVoiceMorphing.Click" />
-            </menu_item_check>
-            <menu_item_separator/>
-            <menu_item_check
-             label="Preview..."
-             name="Preview">
-                <menu_item_check.on_check
-                 function="Floater.Visible"
-                 parameter="voice_effect" />
-                <menu_item_check.on_click
-                 function="Floater.Toggle"
-                 parameter="voice_effect" />
-            </menu_item_check>
-            <menu_item_call
-             label="Subscribe..."
-             name="Subscribe">
-                <menu_item_call.on_click
-                 function="Communicate.VoiceMorphing.Subscribe" />
-            </menu_item_call>
-            <menu_item_call
-             label="Premium perk..."
-             name="PremiumPerk">
-                <menu_item_call.on_click
-                 function="Communicate.VoiceMorphing.PremiumPerk" />
-            </menu_item_call>
-        </menu>
         <menu_item_check
          label="Gestures..."
          name="Gestures"
@@ -742,6 +724,33 @@
              function="Floater.Show"
              parameter="360capture" />
         </menu_item_call>
+        <menu
+         create_jump_keys="true"
+         label="Zoom level"
+         name="Zoom menu"
+         tear_off="true">
+            <menu_item_call
+             label="Zoom out"
+             name="Zoom Out"
+             shortcut="control|8">
+                <menu_item_call.on_click
+                 function="View.ZoomOut" />
+            </menu_item_call>
+            <menu_item_call
+             label="Default"
+             name="Zoom Default"
+             shortcut="control|9">
+                <menu_item_call.on_click
+                 function="View.ZoomDefault" />
+            </menu_item_call>
+            <menu_item_call
+             label="Zoom in"
+             name="Zoom In"
+             shortcut="control|0">
+                <menu_item_call.on_click
+                 function="View.ZoomIn" />
+            </menu_item_call>
+        </menu>
         <menu_item_separator/>
         <menu_item_call
          label="Place profile"
@@ -933,17 +942,27 @@
                  function="World.EnableEnvSettings" 
                  parameter="sunrise" />
             </menu_item_check>
-            <menu_item_check
-             label="Midday"
-             name="Noon"
-             shortcut="control|shift|Y">
-                <menu_item_check.on_click
-                 function="World.EnvSettings"
-                 parameter="noon" />
-                <menu_item_check.on_check
-                 function="World.EnableEnvSettings" 
-                 parameter="noon" />
-            </menu_item_check>
+          <menu_item_check
+           label="Midday"
+           name="Noon"
+           shortcut="control|shift|Y">
+            <menu_item_check.on_click
+             function="World.EnvSettings"
+             parameter="noon" />
+            <menu_item_check.on_check
+             function="World.EnableEnvSettings"
+             parameter="noon" />
+          </menu_item_check>
+          <menu_item_check
+             label="Midday (Legacy)"
+             name="legacy noon">
+            <menu_item_check.on_click
+             function="World.EnvSettings"
+             parameter="legacy noon" />
+            <menu_item_check.on_check
+             function="World.EnableEnvSettings"
+             parameter="legacy noon" />
+          </menu_item_check>
             <menu_item_check
              label="Sunset"
              name="Sunset"
@@ -1449,6 +1468,24 @@ function="World.EnvPreset"
                      function="Tools.SelectOnlyMovableObjects"
                      parameter="movable" />
                 </menu_item_check>
+            <menu_item_check
+                 label="Select Invisible Objects"
+                 name="Select Invisible Objects">
+                    <menu_item_check.on_check
+                     control="SelectInvisibleObjects" />
+                    <menu_item_check.on_click
+                     function="Tools.SelectInvisibleObjects"
+                     parameter="invisible" />
+            </menu_item_check>
+            <menu_item_check
+                 label="Select Reflection Probes"
+                 name="Select Reflection Probes">
+                    <menu_item_check.on_check
+                     control="SelectReflectionProbes" />
+                    <menu_item_check.on_click
+                     function="Tools.SelectReflectionProbes"
+                     parameter="reflection_probes" />
+            </menu_item_check>
                 <menu_item_check
                  label="Select By Surrounding"
                  name="Select By Surrounding">
@@ -1487,6 +1524,15 @@ function="World.EnvPreset"
                      function="Tools.ShowSelectionLightRadius" />
                 </menu_item_check>
                 <menu_item_check
+                       label="Show Reflection Probe Volumes"
+                       name="Show Reflection Probe Volumes">
+                  <menu_item_check.on_check
+                   control="RenderReflectionProbeVolumes" />
+                  <menu_item_check.on_click
+                     function="ToggleControl"
+                     parameter="RenderReflectionProbeVolumes" />
+                </menu_item_check>
+                <menu_item_check
                  label="Show Selection Beam"
                  name="Show Selection Beam">
                     <menu_item_check.on_check
@@ -1495,7 +1541,28 @@ function="World.EnvPreset"
                      function="ToggleControl"
                      parameter="ShowSelectionBeam" />
                 </menu_item_check>
-
+                <menu_item_check
+                       label="Highlight Transparent"
+                       name="Highlight Transparent"
+                       shortcut="control|alt|T"
+                       use_mac_ctrl="true">
+                  <menu_item_check.on_check
+                   function="View.CheckHighlightTransparent" />
+                  <menu_item_check.on_click
+                   function="View.HighlightTransparent" />
+                </menu_item_check>
+        <menu_item_separator/>
+          
+          <menu_item_check
+            label="No Post-processing"
+            name="No Post">
+            <menu_item_check.on_check
+             control="RenderDisablePostProcessing" />
+            <menu_item_check.on_click
+             function="ToggleControl"
+             parameter="RenderDisablePostProcessing" />
+          </menu_item_check>
+          
         <menu_item_separator/>
 
                 <menu_item_check
@@ -1554,7 +1621,7 @@ function="World.EnvPreset"
          name="Upload"
          tear_off="true">
             <menu_item_call
-             label="Image (L$[COST])..."
+             label="Image..."
              layout="topleft"
              name="Upload Image"
              shortcut="control|U">
@@ -1606,6 +1673,16 @@ function="World.EnvPreset"
             <menu_item_call.on_visible
             function="File.VisibleUploadModel"/>
             </menu_item_call>
+          <menu_item_call
+           label="Material..."
+           layout="topleft"
+           name="Upload Material">
+            <menu_item_call.on_click
+             function="File.UploadMaterial"
+             parameter="" />
+            <menu_item_call.on_enable
+             function="File.EnableUploadMaterial" />
+          </menu_item_call>
 	   <menu_item_call
              label="Bulk..."
              layout="topleft"
@@ -1618,7 +1695,8 @@ function="World.EnvPreset"
                  parameter="" />
             </menu_item_call>
         </menu>
-        <menu_item_separator/>
+
+      <menu_item_separator/>
         <menu_item_call
          enabled="false"
          label="Undo"
@@ -1695,18 +1773,11 @@ function="World.EnvPreset"
         </menu_item_call>
         <menu_item_separator/>
         <menu_item_call
-             label="[SECOND_LIFE] News"
-             name="Second Life News">
-             <menu_item_call.on_click
-                 function="Advanced.ShowURL"
-                 parameter="http://community.secondlife.com/t5/Featured-News/bg-p/blog_feature_news"/>  
-        </menu_item_call>
-        <menu_item_call
              label="[SECOND_LIFE] Blogs"
              name="Second Life Blogs">
              <menu_item_call.on_click
                  function="Advanced.ShowURL"
-                 parameter="http://community.secondlife.com/t5/Blogs/ct-p/Blogs"/>
+                 parameter="https://community.secondlife.com/news/"/>
         </menu_item_call>
         <menu_item_separator/>
 
@@ -1894,16 +1965,6 @@ function="World.EnvPreset"
                  parameter="HideSelectedObjects" />
             </menu_item_check>
             <menu_item_check
-             label="Highlight Transparent"
-             name="Highlight Transparent"
-             shortcut="control|alt|T"
-             use_mac_ctrl="true">
-                <menu_item_check.on_check
-                 function="View.CheckHighlightTransparent" />
-                <menu_item_check.on_click
-                 function="View.HighlightTransparent" />
-            </menu_item_check>
-            <menu_item_check
              label="Show Mouselook Crosshairs"
              name="ShowCrosshairs">
                 <menu_item_check.on_check
@@ -1972,7 +2033,57 @@ function="World.EnvPreset"
                  function="Advanced.ToggleRenderType"
                  parameter="simple" />
             </menu_item_check>
-            <menu_item_check
+          <menu_item_check
+             label="Materials"
+             name="Rendering Type Materials">
+            <menu_item_check.on_check
+             function="Advanced.CheckRenderType"
+             parameter="materials" />
+            <menu_item_check.on_click
+             function="Advanced.ToggleRenderType"
+             parameter="materials" />
+          </menu_item_check>
+          <menu_item_check
+             label="Alpha Mask"
+             name="Rendering Type Alpha Mask">
+            <menu_item_check.on_check
+             function="Advanced.CheckRenderType"
+             parameter="alpha_mask" />
+            <menu_item_check.on_click
+             function="Advanced.ToggleRenderType"
+             parameter="alpha_mask" />
+          </menu_item_check>
+          <menu_item_check
+             label="Fullbright Alpha Mask"
+             name="Rendering Type Fullbright Alpha Mask">
+            <menu_item_check.on_check
+             function="Advanced.CheckRenderType"
+             parameter="fullbright_alpha_mask" />
+            <menu_item_check.on_click
+             function="Advanced.ToggleRenderType"
+             parameter="fullbright_alpha_mask" />
+          </menu_item_check>
+          <menu_item_check
+             label="Glow"
+             name="Rendering Type Glow">
+            <menu_item_check.on_check
+             function="Advanced.CheckRenderType"
+             parameter="glow" />
+            <menu_item_check.on_click
+             function="Advanced.ToggleRenderType"
+             parameter="glow" />
+          </menu_item_check>
+          <menu_item_check
+             label="Fullbright"
+             name="Rendering Type Glow">
+            <menu_item_check.on_check
+             function="Advanced.CheckRenderType"
+             parameter="fullbright" />
+            <menu_item_check.on_click
+             function="Advanced.ToggleRenderType"
+             parameter="fullbright" />
+          </menu_item_check>
+          <menu_item_check
              label="Alpha"
              name="Rendering Type Alpha"
              shortcut="control|alt|shift|2">
@@ -2049,17 +2160,6 @@ function="World.EnvPreset"
                  parameter="water" />
             </menu_item_check>
             <menu_item_check
-             label="Ground"
-             name="Rendering Type Ground"
-             shortcut="control|alt|shift|8">
-                <menu_item_check.on_check
-                 function="Advanced.CheckRenderType"
-                 parameter="ground" />
-                <menu_item_check.on_click
-                 function="Advanced.ToggleRenderType"
-                 parameter="ground" />
-            </menu_item_check>
-            <menu_item_check
              label="Volume"
              name="Rendering Type Volume"
              shortcut="control|alt|shift|9">
@@ -2113,6 +2213,16 @@ function="World.EnvPreset"
                 <menu_item_check.on_click
                  function="Advanced.ToggleRenderType"
                  parameter="bump" />
+            </menu_item_check>
+            <menu_item_check
+             label="PBR"
+             name="Rendering Type PBR">
+                <menu_item_check.on_check
+                 function="Advanced.CheckRenderType"
+                 parameter="pbr" />
+                <menu_item_check.on_click
+                 function="Advanced.ToggleRenderType"
+                 parameter="pbr" />
             </menu_item_check>
         </menu>
         <menu
@@ -2325,29 +2435,6 @@ function="World.EnvPreset"
                  function="View.EnableLastChatter" />
             </menu_item_call>
 
-            <menu_item_separator/>
-
-            <menu_item_call
-             label="Zoom In"
-             name="Zoom In"
-             shortcut="control|0">
-                <menu_item_call.on_click
-                 function="View.ZoomIn" />
-            </menu_item_call>
-            <menu_item_call
-             label="Zoom Default"
-             name="Zoom Default"
-             shortcut="control|9">
-                <menu_item_call.on_click
-                 function="View.ZoomDefault" />
-            </menu_item_call>
-            <menu_item_call
-             label="Zoom Out"
-             name="Zoom Out"
-             shortcut="control|8">
-                <menu_item_call.on_click
-                 function="View.ZoomOut" />
-            </menu_item_call>
         </menu> <!--Shortcuts-->
 
         <menu_item_separator/>
@@ -2470,20 +2557,6 @@ function="World.EnvPreset"
                function="Advanced.ToggleConsole"
                parameter="scene monitor" />
             </menu_item_check>
-            <menu_item_call
-              enabled="false"
-              visible="false"
-              label="Texture Fetch Debug Console"
-              name="Texture Fetch Debug Console">
-              <menu_item_call.on_click
-                function="Floater.Show"
-                parameter="tex_fetch_debugger" />
-              <on_enable
-                function="Develop.SetTexFetchDebugger" />
-              <on_visible
-                function="Develop.SetTexFetchDebugger" />
-            </menu_item_call>
-          
             <menu_item_separator/>
 
             <menu_item_call
@@ -2673,6 +2746,12 @@ function="World.EnvPreset"
                  function="Advanced.ForceErrorLlerror" />
             </menu_item_call>
             <menu_item_call
+             label="Force LLError, Message And Crash"
+             name="Force LLError And Crash">
+                <menu_item_call.on_click
+                 function="Advanced.ForceErrorLlerrorMsg" />
+            </menu_item_call>
+            <menu_item_call
              label="Force Bad Memory Access"
              name="Force Bad Memory Access">
                 <menu_item_call.on_click
@@ -2703,10 +2782,30 @@ function="World.EnvPreset"
                  function="Advanced.ForceErrorSoftwareException" />
             </menu_item_call>
             <menu_item_call
+             label="Force OS Exception"
+             name="Force OS Exception">
+                <menu_item_call.on_click
+                 function="Advanced.ForceErrorOSException" />
+                <menu_item_call.on_visible
+                 function="Advanced.EnableErrorOSException" />
+            </menu_item_call>
+            <menu_item_call
              label="Force a Crash in a Coroutine"
              name="Force a Crash in a Coroutine">
                 <menu_item_call.on_click
                  function="Advanced.ForceErrorCoroutineCrash" />
+            </menu_item_call>
+            <menu_item_call
+             label="Force a Crash in a Coroprocedure"
+             name="Force a Crash in a Coroprocedure">
+                <menu_item_call.on_click
+                 function="Advanced.ForceErrorCoroprocedureCrash" />
+            </menu_item_call>
+            <menu_item_call
+             label="Force a Crash in a Work Queue"
+             name="Force a Crash in a Work Queue">
+                <menu_item_call.on_click
+                 function="Advanced.ForceErrorWorkQueueCrash" />
             </menu_item_call>
             <menu_item_call
              label="Force a Crash in a Thread"
@@ -2728,6 +2827,78 @@ function="World.EnvPreset"
                 parameter="mem_leaking" />
                </menu_item_call>
         </menu>
+      <menu
+         create_jump_keys="true"
+         label="GLTF"
+         name="GLTF"
+         tear_off="true">
+        <menu_item_call
+         label="Open..."
+         name="Open...">
+            <!--<menu_item_call.on_enable
+             function="EnableGLTF"/>-->
+          <menu_item_call.on_click
+           function="Advanced.ClickGLTFOpen" />
+        </menu_item_call>
+        <menu_item_call
+         label="Save As..."
+         name="Save As...">
+          <menu_item_call.on_enable
+             function="EnableGLTFSaveAs"/>
+          <menu_item_call.on_click
+           function="Advanced.ClickGLTFSaveAs" />
+        </menu_item_call>
+        <menu_item_call
+         label="Upload..."
+         name="Upload...">
+          <menu_item_call.on_enable
+             function="EnableGLTFUpload"/>
+          <menu_item_call.on_click
+           function="Advanced.ClickGLTFUpload" />
+        </menu_item_call>
+        <menu_item_call
+         label="Edit..."
+         name="Edit...">
+          <menu_item_call.on_enable
+             function="EnableGLTFUpload"/>
+          <menu_item_call.on_click
+           function="Advanced.ClickGLTFEdit" />
+        </menu_item_call>
+      </menu>
+      <menu
+         create_jump_keys="true"
+         label="Video"
+         name="Video"
+         tear_off="true">
+        <menu_item_call
+         label="1080x1920"
+         name="1080x1920">
+          <menu_item_call.on_click
+           function="Advanced.ClickResizeWindow"
+            parameter="1080x1920"/>
+        </menu_item_call>
+        <menu_item_call
+         label="1920x1080"
+         name="1920x1080">
+          <menu_item_call.on_click
+           function="Advanced.ClickResizeWindow"
+            parameter="1920x1080"/>
+        </menu_item_call>
+        <menu_item_call
+         label="1280x720"
+         name="1280x720">
+          <menu_item_call.on_click
+           function="Advanced.ClickResizeWindow"
+            parameter="1280x720"/>
+          </menu_item_call>
+        <menu_item_call
+          label="720x1280"
+         name="720x1280">
+          <menu_item_call.on_click
+           function="Advanced.ClickResizeWindow"
+            parameter="720x1280"/>
+          </menu_item_call>
+      </menu>
         <menu
          create_jump_keys="true"
          label="Render Tests"
@@ -2762,15 +2933,6 @@ function="World.EnvPreset"
                  function="Advanced.TogglePeriodicSlowFrame"
                  parameter="points" />
             </menu_item_check>
-            <menu_item_check
-             label="Frame Test"
-             name="Frame Test">
-                <menu_item_check.on_check
-                 function="Advanced.CheckFrameTest"
-                 parameter="Frame Test" />
-                <menu_item_check.on_click
-                 function="Advanced.ToggleFrameTest" />
-            </menu_item_check>
           <menu_item_call
              label="Frame Profile"
              name="Frame Profile">
@@ -2782,6 +2944,12 @@ function="World.EnvPreset"
              name="Benchmark">
               <menu_item_call.on_click
                function="Advanced.ClickRenderBenchmark" />
+          </menu_item_call>
+          <menu_item_call
+           label="HDRI Preview"
+           name="HDRI Preview">
+            <menu_item_call.on_click
+             function="Advanced.ClickHDRIPreview" />
           </menu_item_call>
         </menu>
       <menu
@@ -2818,6 +2986,16 @@ function="World.EnvPreset"
           <menu_item_check.on_click
            function="Advanced.ToggleInfoDisplay"
            parameter="octree" />
+        </menu_item_check>
+        <menu_item_check
+         label="GLTF Nodes"
+         name="GLTF Nodes">
+          <menu_item_check.on_check
+           function="Advanced.CheckInfoDisplay"
+           parameter="nodes" />
+          <menu_item_check.on_click
+           function="Advanced.ToggleInfoDisplay"
+           parameter="nodes" />
         </menu_item_check>
         <menu_item_check
          label="Shadow Frusta"
@@ -2930,16 +3108,6 @@ function="World.EnvPreset"
            parameter="triangle count" />
         </menu_item_check>
         <menu_item_check
-         label="Build Queue"
-         name="Build Queue">
-          <menu_item_check.on_check
-           function="Advanced.CheckInfoDisplay"
-           parameter="build queue" />
-          <menu_item_check.on_click
-           function="Advanced.ToggleInfoDisplay"
-           parameter="build queue" />
-        </menu_item_check>
-        <menu_item_check
          label="Lights"
          name="Lights">
           <menu_item_check.on_check
@@ -2948,6 +3116,26 @@ function="World.EnvPreset"
           <menu_item_check.on_click
            function="Advanced.ToggleInfoDisplay"
            parameter="lights" />
+        </menu_item_check>
+        <menu_item_check
+         label="Reflection Probes"
+         name="Reflection Probes">
+          <menu_item_check.on_check
+           function="Advanced.CheckInfoDisplay"
+           parameter="reflection probes" />
+          <menu_item_check.on_click
+           function="Advanced.ToggleInfoDisplay"
+           parameter="reflection probes" />
+        </menu_item_check>
+        <menu_item_check
+         label="Probe Updates"
+         name="Probe Updates">
+          <menu_item_check.on_check
+           function="Advanced.CheckInfoDisplay"
+           parameter="probe updates" />
+          <menu_item_check.on_click
+           function="Advanced.ToggleInfoDisplay"
+           parameter="probe updates" />
         </menu_item_check>
         <menu_item_check
          label="Particles"
@@ -3115,23 +3303,9 @@ function="World.EnvPreset"
                 <menu_item_check.on_click
                  function="ToggleControl"
                  parameter="UseOcclusion" />
-                <menu_item_check.on_enable
-                 function="Advanced.EnableObjectObjectOcclusion" />
             </menu_item_check>
           <menu_item_separator />
 
-          <menu_item_check
-                       label="Advanced Lighting Model"
-                       name="Advanced Lighting Model">
-            <menu_item_check.on_check
-             function="CheckControl"
-             parameter="RenderDeferred" />
-            <menu_item_check.on_click
-             function="ToggleControl"
-             parameter="RenderDeferred" />
-            <menu_item_check.on_enable
-                 function="Advanced.EnableRenderDeferred" />
-          </menu_item_check>
           <menu_item_check
                        label="   Shadows from Sun/Moon/Projectors"
                        name="Shadows from Sun/Moon/Projectors">
@@ -3219,36 +3393,6 @@ function="World.EnvPreset"
                  parameter="TextureDisable" />
             </menu_item_check>
             <menu_item_check
-              label="Disable Ambient"
-             name="Disable Ambient">
-            <menu_item_check.on_check
-             function="CheckControl"
-             parameter="AmbientDisable" />
-            <menu_item_check.on_click
-             function="ToggleShaderControl"
-             parameter="AmbientDisable" />
-          </menu_item_check>
-          <menu_item_check
-             label="Disable Sunlight"
-             name="Disable Sunlight">
-            <menu_item_check.on_check
-             function="CheckControl"
-             parameter="SunlightDisable" />
-            <menu_item_check.on_click
-             function="ToggleShaderControl"
-             parameter="SunlightDisable" />
-          </menu_item_check>
-          <menu_item_check
-             label="Disable Local Lights"
-             name="Disable Local Lights">
-            <menu_item_check.on_check
-             function="CheckControl"
-             parameter="LocalLightDisable" />
-            <menu_item_check.on_click
-             function="ToggleShaderControl"
-             parameter="LocalLightDisable" />
-          </menu_item_check>
-            <menu_item_check
               label="Full Res Textures"
              name="Rull Res Textures">
                 <menu_item_check.on_check
@@ -3279,17 +3423,34 @@ function="World.EnvPreset"
                  parameter="RenderAttachedParticles" />
             </menu_item_check>
             <menu_item_check
-             label="Hover Glow Objects"
-             name="Hover Glow Objects">
+             label="Collect Font Vertex Buffers"
+             name="Collect Font Vertex Buffers">
                 <menu_item_check.on_check
                  function="CheckControl"
-                 parameter="RenderHoverGlowEnable" />
+                 parameter="CollectFontVertexBuffers" />
                 <menu_item_check.on_click
                  function="ToggleControl"
-                 parameter="RenderHoverGlowEnable" />
+                 parameter="CollectFontVertexBuffers" />
             </menu_item_check>
           <menu_item_separator />
-          
+          <menu_item_check
+             label="Enable Shader Cache"
+             name="Enable Shader Cache">
+            <menu_item_check.on_check
+             function="CheckControl"
+             parameter="RenderShaderCacheEnabled" />
+            <menu_item_check.on_click
+             function="ToggleShaderControl"
+             parameter="RenderShaderCacheEnabled" />
+          </menu_item_check>
+          <menu_item_call
+            enabled="true"
+            label="Clear Shader Cache"
+            name="Shader Cache Clear">
+            <menu_item_call.on_click
+             function="Advanced.ClearShaderCache" />
+          </menu_item_call>
+          <menu_item_separator />
           <menu_item_call
             enabled="true"
             label="Clear Cache Immediately"
@@ -3509,6 +3670,38 @@ function="World.EnvPreset"
                  function="Advanced.ResetInterestLists" />
 			</menu_item_call>
 		</menu>
+        <!-- terrain -->
+        <menu
+         create_jump_keys="true"
+         label="Terrain"
+         name="DevelopTerrain"
+         tear_off="true">
+            <menu_item_call
+              enabled="true"
+              label="Rebuild Terrain"
+              name="Rebuild Terrain">
+              <menu_item_call.on_click
+               function="Advanced.RebuildTerrain" />
+            </menu_item_call>
+
+            <menu_item_separator/>
+
+            <menu_item_call
+              label="Create Local Paintmap"
+              name="Create Local Paintmap">
+              <menu_item_call.on_enable
+               function="EnableTerrainLocalPaintMap"/>
+              <menu_item_call.on_click
+               function="Advanced.TerrainCreateLocalPaintMap" />
+            </menu_item_call>
+            <menu_item_call
+              enabled="true"
+              label="Delete Local Paintmap"
+              name="Delete Local Paintmap">
+              <menu_item_call.on_click
+               function="Advanced.TerrainDeleteLocalPaintMap" />
+            </menu_item_call>
+		</menu>
         <menu
          create_jump_keys="true"
          label="UI"
@@ -3521,6 +3714,33 @@ function="World.EnvPreset"
             <menu_item_call.on_click
              function="Advanced.WebContentTest"
              parameter="http://duckduckgo.com"/>
+          </menu_item_call>
+            <menu_item_call
+             label="Inventory Thumbnails Helper"
+             name="Inventory Thumbnails Helper"
+				shortcut="control|alt|shift|X">
+                <menu_item_call.on_click
+                 function="Floater.Show"
+                 parameter="inventory_thumbnails_helper" />
+            </menu_item_call>
+            <menu_item_call
+           label="FB Connect Test"
+           name="FB Connect Test">
+            <menu_item_call.on_click
+             function="Advanced.WebContentTest"
+             parameter="https://cryptic-ridge-1632.herokuapp.com/"/>
+          </menu_item_call>
+          <menu_item_call
+           label="Dump Fonts"
+           name="Dump Fonts">
+            <menu_item_call.on_click
+             function="Develop.Fonts.Dump" />
+          </menu_item_call>
+          <menu_item_call
+           label="Dump Font Textures"
+           name="Dump Font Textures">
+            <menu_item_call.on_click
+             function="Develop.Fonts.DumpTextures" />
           </menu_item_call>
           <menu_item_call
              label="Dump SelectMgr"
@@ -3591,6 +3811,22 @@ function="World.EnvPreset"
                  function="Advanced.ToggleDebugViews" />
             </menu_item_check>
             <menu_item_check
+             label="Debug Unicode"
+             name="Debug Unicode">
+                <menu_item_check.on_check
+                 function="Advanced.CheckDebugUnicode" />
+                <menu_item_check.on_click
+                 function="Advanced.ToggleDebugUnicode" />
+            </menu_item_check>
+            <menu_item_check
+             label="Debug Camera Controls"
+             name="Debug Camera Controls">
+                <menu_item_check.on_check
+                 function="Advanced.CheckDebugCamera" />
+                <menu_item_check.on_click
+                 function="Advanced.ToggleDebugCamera" />
+            </menu_item_check>
+            <menu_item_check
              label="Debug Name Tooltips"
              name="Debug Name Tooltips">
                 <menu_item_check.on_check
@@ -3634,6 +3870,13 @@ function="World.EnvPreset"
          name="XUI"
          tear_off="true">
             <menu_item_call
+             label="Show Color settings"
+             name="Color Settings">
+                <menu_item_call.on_click
+                 function="Floater.Toggle"
+                 parameter="settings_color" />
+            </menu_item_call>
+            <menu_item_call
                label="Reload Color Settings"
                name="Reload Color Settings">
               <menu_item_call.on_click
@@ -3645,6 +3888,13 @@ function="World.EnvPreset"
                 <menu_item_call.on_click
                  function="Floater.Show"
                  parameter="font_test" />
+            </menu_item_call>
+            <menu_item_call
+             label="Show SLapps Test"
+             name="Show SLapps Test">
+                <menu_item_call.on_click
+                 function="Floater.Show"
+                 parameter="slapp_test" />
             </menu_item_call>
             <menu_item_check
              label="Show XUI Names"
@@ -3770,6 +4020,26 @@ function="World.EnvPreset"
                      function="ToggleControl"
                      parameter="AllowSelectAvatar" />
                 </menu_item_check>
+                <menu_item_check
+                 label="Disable Look At Animation"
+                 name="Disable Look At Animation">
+                    <menu_item_check.on_check
+                     function="CheckControl"
+                     parameter="DisableLookAtAnimation" />
+                    <menu_item_check.on_click
+                     function="ToggleControl"
+                     parameter="DisableLookAtAnimation" />
+                </menu_item_check>
+                <menu_item_check
+                 label="Render Only Friends"
+                 name="Render Only Friends">
+                    <menu_item_check.on_check
+                     function="CheckControl"
+                     parameter="RenderAvatarFriendsOnly" />
+                    <menu_item_check.on_click
+                     function="ToggleControl"
+                     parameter="RenderAvatarFriendsOnly" />
+                </menu_item_check>
             </menu>
             <menu
              create_jump_keys="true"
@@ -3867,6 +4137,16 @@ function="World.EnvPreset"
                  function="Advanced.ToggleDebugCharacterVis" />
             </menu_item_check>
             <menu_item_check
+             label="Debug Character Rez State"
+             name="Debug Character Rez State">
+                <menu_item_check.on_check
+                 function="CheckControl"
+                 parameter="NameTagDebugAVRezState" />
+                <menu_item_check.on_click
+                 function="ToggleControl"
+                 parameter="NameTagDebugAVRezState" />
+            </menu_item_check>
+            <menu_item_check
              label="Show Collision Skeleton"
              name="Show Collision Skeleton">
                 <menu_item_check.on_check
@@ -3941,16 +4221,6 @@ function="World.EnvPreset"
 
         <menu_item_separator/>
 
-        <menu_item_check
-         label="HTTP Textures"
-         name="HTTP Textures">
-            <menu_item_check.on_check
-             function="CheckControl"
-             parameter="ImagePipelineUseHTTP" />
-            <menu_item_check.on_click
-             function="ToggleControl"
-             parameter="ImagePipelineUseHTTP" />
-        </menu_item_check>
         <menu_item_call
          label="Compress Images"
          name="Compress Images">
@@ -4397,7 +4667,7 @@ function="World.EnvPreset"
                     <menu_item_call.on_click
                      function="PromptShowURL"
                      name="PublicIssueTracker_url"
-                     parameter="WebLaunchPublicIssue,http://jira.secondlife.com" />
+                     parameter="WebLaunchPublicIssue,https://feedback.secondlife.com/" />
                 </menu_item_call>
                 <menu_item_call
                  label="Public Issue Tracker Help"

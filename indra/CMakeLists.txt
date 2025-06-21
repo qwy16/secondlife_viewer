@@ -29,13 +29,9 @@ else()
   set( USE_AUTOBUILD_3P ON )
 endif()
 
-# The viewer code base can now be successfully compiled with -std=c++14. But
-# turning that on in the generic viewer-build-variables/variables file would
-# potentially require tweaking each of our ~50 third-party library builds.
-# Until we decide to set -std=c++14 in viewer-build-variables/variables, set
-# it locally here: we want to at least prevent inadvertently reintroducing
-# viewer code that would fail with C++14.
-set(CMAKE_CXX_STANDARD 17)
+if (NOT DEFINED CMAKE_CXX_STANDARD)
+  set(CMAKE_CXX_STANDARD 20)
+endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(Variables)
@@ -63,6 +59,7 @@ add_subdirectory(${LIBS_OPEN_PREFIX}llmessage)
 add_subdirectory(${LIBS_OPEN_PREFIX}llprimitive)
 add_subdirectory(${LIBS_OPEN_PREFIX}llrender)
 add_subdirectory(${LIBS_OPEN_PREFIX}llfilesystem)
+add_subdirectory(${LIBS_OPEN_PREFIX}llwebrtc)
 add_subdirectory(${LIBS_OPEN_PREFIX}llwindow)
 add_subdirectory(${LIBS_OPEN_PREFIX}llxml)
 

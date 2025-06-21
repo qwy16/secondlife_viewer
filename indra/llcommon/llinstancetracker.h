@@ -1,4 +1,4 @@
-/** 
+/**
  * @file llinstancetracker.h
  * @brief LLInstanceTracker is a mixin class that automatically tracks object
  *        instances with or without an associated key
@@ -6,21 +6,21 @@
  * $LicenseInfo:firstyear=2000&license=viewerlgpl$
  * Second Life Viewer Source Code
  * Copyright (C) 2010, Linden Research, Inc.
- * 
+ *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
  * License as published by the Free Software Foundation;
  * version 2.1 of the License only.
- * 
+ *
  * This library is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  * Lesser General Public License for more details.
- * 
+ *
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
- * 
+ *
  * Linden Research, Inc., 945 Battery Street, San Francisco, CA  94111  USA
  * $/LicenseInfo$
  */
@@ -52,7 +52,7 @@ namespace LLInstanceTrackerPrivate
     struct StaticBase
     {
         // We need to be able to lock static data while manipulating it.
-        std::mutex mMutex;
+        LL_PROFILE_MUTEX_NAMED(std::mutex, mMutex, "InstanceTracker Data");
     };
 
     void logerrs(const char* cls, const std::string&, const std::string&, const std::string&);
@@ -99,27 +99,32 @@ public:
         return mSelf;
     }
 
-    static size_t instanceCount() 
-    { 
-        return LockStatic()->mMap.size(); 
+    static size_t instanceCount()
+    {
+        LockStatic lock; LL_PROFILE_MUTEX_LOCK(lock->mMutex);
+        return lock->mMap.size();
     }
-    
-    // snapshot of std::pair<const KEY, std::shared_ptr<T>> pairs
-    class snapshot
+
+    // snapshot of std::pair<const KEY, std::shared_ptr<SUBCLASS>> pairs, for
+    // some SUBCLASS derived from T
+    template <typename SUBCLASS>
+    class snapshot_of
     {
         // It's very important that what we store in this snapshot are
         // weak_ptrs, NOT shared_ptrs. That's how we discover whether any
         // instance has been deleted during the lifespan of a snapshot.
         typedef std::vector<std::pair<const KEY, weak_t>> VectorType;
-        // Dereferencing our iterator produces a std::shared_ptr for each
-        // instance that still exists. Since we store weak_ptrs, that involves
-        // two chained transformations:
+        // Dereferencing the iterator we publish produces a
+        // std::shared_ptr<SUBCLASS> for each instance that still exists.
+        // Since we store weak_ptr<T>, that involves two chained
+        // transformations:
         // - a transform_iterator to lock the weak_ptr and return a shared_ptr
-        // - a filter_iterator to skip any shared_ptr that has become invalid.
+        // - a filter_iterator to skip any shared_ptr<T> that has become
+        //   invalid or references any T instance that isn't SUBCLASS.
         // It is very important that we filter lazily, that is, during
         // traversal. Any one of our stored weak_ptrs might expire during
         // traversal.
-        typedef std::pair<const KEY, ptr_t> strong_pair;
+        typedef std::pair<const KEY, std::shared_ptr<SUBCLASS>> strong_pair;
         // Note for future reference: nat has not yet had any luck (up to
         // Boost 1.67) trying to use boost::transform_iterator with a hand-
         // coded functor, only with actual functions. In my experience, an
@@ -127,7 +132,7 @@ public:
         // result_type typedef. But this works.
         static strong_pair strengthen(typename VectorType::value_type& pair)
         {
-            return { pair.first, pair.second.lock() };
+            return { pair.first, std::dynamic_pointer_cast<SUBCLASS>(pair.second.lock()) };
         }
         static bool dead_skipper(const strong_pair& pair)
         {
@@ -135,7 +140,7 @@ public:
         }
 
     public:
-        snapshot():
+        snapshot_of():
             // populate our vector with a snapshot of (locked!) InstanceMap
             // note, this assigns pair<KEY, shared_ptr> to pair<KEY, weak_ptr>
             mData(mLock->mMap.begin(), mLock->mMap.end())
@@ -184,55 +189,62 @@ public:
 #endif // LL_WINDOWS
         VectorType mData;
     };
+    using snapshot = snapshot_of<T>;
 
-    // iterate over this for references to each instance
-    class instance_snapshot: public snapshot
+    // iterate over this for references to each SUBCLASS instance
+    template <typename SUBCLASS>
+    class instance_snapshot_of: public snapshot_of<SUBCLASS>
     {
     private:
-        static T& instance_getter(typename snapshot::iterator::reference pair)
+        using super = snapshot_of<SUBCLASS>;
+        static T& instance_getter(typename super::iterator::reference pair)
         {
             return *pair.second;
         }
     public:
         typedef boost::transform_iterator<decltype(instance_getter)*,
-                                          typename snapshot::iterator> iterator;
-        iterator begin() { return iterator(snapshot::begin(), instance_getter); }
-        iterator end()   { return iterator(snapshot::end(),   instance_getter); }
+                                          typename super::iterator> iterator;
+        iterator begin() { return iterator(super::begin(), instance_getter); }
+        iterator end()   { return iterator(super::end(),   instance_getter); }
 
         void deleteAll()
         {
-            for (auto it(snapshot::begin()), end(snapshot::end()); it != end; ++it)
+            for (auto it(super::begin()), end(super::end()); it != end; ++it)
             {
                 delete it->second.get();
             }
         }
-    };                   
+    };
+    using instance_snapshot = instance_snapshot_of<T>;
 
     // iterate over this for each key
-    class key_snapshot: public snapshot
+    template <typename SUBCLASS>
+    class key_snapshot_of: public snapshot_of<SUBCLASS>
     {
     private:
-        static KEY key_getter(typename snapshot::iterator::reference pair)
+        using super = snapshot_of<SUBCLASS>;
+        static KEY key_getter(typename super::iterator::reference pair)
         {
             return pair.first;
         }
     public:
         typedef boost::transform_iterator<decltype(key_getter)*,
-                                          typename snapshot::iterator> iterator;
-        iterator begin() { return iterator(snapshot::begin(), key_getter); }
-        iterator end()   { return iterator(snapshot::end(),   key_getter); }
+                                          typename super::iterator> iterator;
+        iterator begin() { return iterator(super::begin(), key_getter); }
+        iterator end()   { return iterator(super::end(),   key_getter); }
     };
+    using key_snapshot = key_snapshot_of<T>;
 
     static ptr_t getInstance(const KEY& k)
     {
-        LockStatic lock;
+        LockStatic lock; LL_PROFILE_MUTEX_LOCK(lock->mMutex);
         const InstanceMap& map(lock->mMap);
         typename InstanceMap::const_iterator found = map.find(k);
         return (found == map.end()) ? NULL : found->second;
     }
 
 protected:
-    LLInstanceTracker(const KEY& key) 
+    LLInstanceTracker(const KEY& key)
     {
         // We do not intend to manage the lifespan of this object with
         // shared_ptr, so give it a no-op deleter. We store shared_ptrs in our
@@ -241,19 +253,19 @@ protected:
         ptr_t ptr(static_cast<T*>(this), [](T*){});
         // save corresponding weak_ptr for future reference
         mSelf = ptr;
-        LockStatic lock;
+        LockStatic lock; LL_PROFILE_MUTEX_LOCK(lock->mMutex);
         add_(lock, key, ptr);
     }
 public:
     virtual ~LLInstanceTracker()
     {
-        LockStatic lock;
+        LockStatic lock; LL_PROFILE_MUTEX_LOCK(lock->mMutex);
         remove_(lock);
     }
 protected:
     virtual void setKey(KEY key)
     {
-        LockStatic lock;
+        LockStatic lock; LL_PROFILE_MUTEX_LOCK(lock->mMutex);
         // Even though the shared_ptr we store in our map has a no-op deleter
         // for T itself, letting the use count decrement to 0 will still
         // delete the use-count object. Capture the shared_ptr we just removed
@@ -275,9 +287,9 @@ private:
     static std::string report(const char* key) { return report(std::string(key)); }
 
     // caller must instantiate LockStatic
-    void add_(LockStatic& lock, const KEY& key, const ptr_t& ptr) 
-    { 
-        mInstanceKey = key; 
+    void add_(LockStatic& lock, const KEY& key, const ptr_t& ptr)
+    {
+        mInstanceKey = key;
         InstanceMap& map = lock->mMap;
         switch(KEY_COLLISION_BEHAVIOR)
         {
@@ -362,28 +374,32 @@ public:
     {
         return mSelf;
     }
-    
+
     static size_t instanceCount()
     {
-        return LockStatic()->mSet.size();
+        LockStatic lock; LL_PROFILE_MUTEX_LOCK(lock->mMutex);
+        return lock->mSet.size();
     }
 
-    // snapshot of std::shared_ptr<T> pointers
-    class snapshot
+    // snapshot of std::shared_ptr<SUBCLASS> pointers
+    template <typename SUBCLASS>
+    class snapshot_of
     {
         // It's very important that what we store in this snapshot are
         // weak_ptrs, NOT shared_ptrs. That's how we discover whether any
         // instance has been deleted during the lifespan of a snapshot.
         typedef std::vector<weak_t> VectorType;
-        // Dereferencing our iterator produces a std::shared_ptr for each
-        // instance that still exists. Since we store weak_ptrs, that involves
-        // two chained transformations:
+        // Dereferencing the iterator we publish produces a
+        // std::shared_ptr<SUBCLASS> for each instance that still exists.
+        // Since we store weak_ptrs, that involves two chained
+        // transformations:
         // - a transform_iterator to lock the weak_ptr and return a shared_ptr
-        // - a filter_iterator to skip any shared_ptr that has become invalid.
-        typedef std::shared_ptr<T> strong_ptr;
+        // - a filter_iterator to skip any shared_ptr that has become invalid
+        //   or references any T instance that isn't SUBCLASS.
+        typedef std::shared_ptr<SUBCLASS> strong_ptr;
         static strong_ptr strengthen(typename VectorType::value_type& ptr)
         {
-            return ptr.lock();
+            return std::dynamic_pointer_cast<SUBCLASS>(ptr.lock());
         }
         static bool dead_skipper(const strong_ptr& ptr)
         {
@@ -391,7 +407,7 @@ public:
         }
 
     public:
-        snapshot():
+        snapshot_of():
             // populate our vector with a snapshot of (locked!) InstanceSet
             // note, this assigns stored shared_ptrs to weak_ptrs for snapshot
             mData(mLock->mSet.begin(), mLock->mSet.end())
@@ -437,22 +453,33 @@ public:
 #endif // LL_WINDOWS
         VectorType mData;
     };
+    using snapshot = snapshot_of<T>;
 
     // iterate over this for references to each instance
-    struct instance_snapshot: public snapshot
+    template <typename SUBCLASS>
+    class instance_snapshot_of: public snapshot_of<SUBCLASS>
     {
-        typedef boost::indirect_iterator<typename snapshot::iterator> iterator;
-        iterator begin() { return iterator(snapshot::begin()); }
-        iterator end()   { return iterator(snapshot::end()); }
+    private:
+        using super = snapshot_of<SUBCLASS>;
+
+    public:
+        typedef boost::indirect_iterator<typename super::iterator> iterator;
+        iterator begin() { return iterator(super::begin()); }
+        iterator end()   { return iterator(super::end()); }
 
         void deleteAll()
         {
-            for (auto it(snapshot::begin()), end(snapshot::end()); it != end; ++it)
+            for (auto it(super::begin()), end(super::end()); it != end; ++it)
             {
                 delete it->get();
             }
         }
     };
+    using instance_snapshot = instance_snapshot_of<T>;
+    // key_snapshot_of isn't really meaningful, but define it anyway to avoid
+    // requiring two different LLInstanceTrackerSubclass implementations.
+    template <typename SUBCLASS>
+    using key_snapshot_of = instance_snapshot_of<SUBCLASS>;
 
 protected:
     LLInstanceTracker()
@@ -463,14 +490,16 @@ protected:
         // save corresponding weak_ptr for future reference
         mSelf = ptr;
         // Also store it in our class-static set to track this instance.
-        LockStatic()->mSet.emplace(ptr);
+        LockStatic lock; LL_PROFILE_MUTEX_LOCK(lock->mMutex);
+        lock->mSet.emplace(ptr);
     }
 public:
     virtual ~LLInstanceTracker()
     {
         // convert weak_ptr to shared_ptr because that's what we store in our
         // InstanceSet
-        LockStatic()->mSet.erase(mSelf.lock());
+        LockStatic lock; LL_PROFILE_MUTEX_LOCK(lock->mMutex);
+        lock->mSet.erase(mSelf.lock());
     }
 protected:
     LLInstanceTracker(const LLInstanceTracker& other):

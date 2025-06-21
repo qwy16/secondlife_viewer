@@ -3,7 +3,7 @@
  * @author Nat Goodspeed
  * @date   2021-10-06
  * @brief  Implementation for WorkQueue.
- * 
+ *
  * $LicenseInfo:firstyear=2021&license=viewerlgpl$
  * Copyright (c) 2021, Linden Research, Inc.
  * $/LicenseInfo$
@@ -17,6 +17,7 @@
 // std headers
 // external library headers
 // other Linden headers
+#include "llapp.h"
 #include "llcoros.h"
 #include LLCOROS_MUTEX_HEADER
 #include "llerror.h"
@@ -26,12 +27,195 @@
 using Mutex = LLCoros::Mutex;
 using Lock  = LLCoros::LockType;
 
-LL::WorkQueue::WorkQueue(const std::string& name, size_t capacity):
-    super(makeName(name)),
-    mQueue(capacity)
+/*****************************************************************************
+*   WorkQueueBase
+*****************************************************************************/
+LL::WorkQueueBase::WorkQueueBase(const std::string& name):
+    super(makeName(name))
 {
     // TODO: register for "LLApp" events so we can implicitly close() on
     // viewer shutdown.
+}
+
+void LL::WorkQueueBase::runUntilClose()
+{
+    try
+    {
+        for (;;)
+        {
+            LL_PROFILE_ZONE_SCOPED_CATEGORY_THREAD;
+            callWork(pop_());
+        }
+    }
+    catch (const Closed&)
+    {
+    }
+}
+
+bool LL::WorkQueueBase::runPending()
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_THREAD;
+    for (Work work; tryPop_(work); )
+    {
+        callWork(work);
+    }
+    return ! done();
+}
+
+bool LL::WorkQueueBase::runOne()
+{
+    Work work;
+    if (tryPop_(work))
+    {
+        callWork(work);
+    }
+    return ! done();
+}
+
+bool LL::WorkQueueBase::runUntil(const TimePoint& until)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_THREAD;
+    // Should we subtract some slop to allow for typical Work execution time?
+    // How much slop?
+    // runUntil() is simply a time-bounded runPending().
+    for (Work work; TimePoint::clock::now() < until && tryPop_(work); )
+    {
+        callWork(work);
+    }
+    return ! done();
+}
+
+std::string LL::WorkQueueBase::makeName(const std::string& name)
+{
+    if (! name.empty())
+        return name;
+
+    static U32 discriminator = 0;
+    static Mutex mutex;
+    U32 num;
+    {
+        // Protect discriminator from concurrent access by different threads.
+        // It can't be thread_local, else two racing threads will come up with
+        // the same name.
+        Lock lk(mutex);
+        num = discriminator++;
+    }
+    return STRINGIZE("WorkQueue" << num);
+}
+
+namespace
+{
+#if LL_WINDOWS
+
+    static const U32 STATUS_MSC_EXCEPTION = 0xE06D7363; // compiler specific
+
+    U32 exception_filter(U32 code, struct _EXCEPTION_POINTERS* exception_infop)
+    {
+        if (LLApp::instance()->reportCrashToBugsplat((void*)exception_infop))
+        {
+            // Handled
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+        else if (code == STATUS_MSC_EXCEPTION)
+        {
+            // C++ exception, go on
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+        else
+        {
+            // handle it, convert to std::exception
+            return EXCEPTION_EXECUTE_HANDLER;
+        }
+
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    void cpphandle(const LL::WorkQueueBase::Work& work)
+    {
+        // SE and C++ can not coexists, thus two handlers
+        try
+        {
+            work();
+        }
+        catch (const LLContinueError&)
+        {
+            // Any uncaught exception derived from LLContinueError will be caught
+            // here and logged. This coroutine will terminate but the rest of the
+            // viewer will carry on.
+            LOG_UNHANDLED_EXCEPTION(STRINGIZE("LLContinue in work queue"));
+        }
+    }
+
+    void sehandle(const LL::WorkQueueBase::Work& work)
+    {
+        __try
+        {
+            // handle stop and continue exceptions first
+            cpphandle(work);
+        }
+        __except (exception_filter(GetExceptionCode(), GetExceptionInformation()))
+        {
+            // convert to C++ styled exception
+            char integer_string[512];
+            sprintf(integer_string, "SEH, code: %lu\n", GetExceptionCode());
+            throw std::exception(integer_string);
+        }
+    }
+#endif // LL_WINDOWS
+} // anonymous namespace
+
+void LL::WorkQueueBase::callWork(const Work& work)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_THREAD;
+
+#ifdef LL_WINDOWS
+    // can not use __try directly, toplevel requires unwinding, thus use of a wrapper
+    sehandle(work);
+#else // LL_WINDOWS
+    try
+    {
+        work();
+    }
+    catch (LLContinueError&)
+    {
+        LOG_UNHANDLED_EXCEPTION(getKey());
+    }
+    catch (...)
+    {
+        // Stash any other kind of uncaught exception to be rethrown by main thread.
+        LL_WARNS("LLCoros") << "Capturing and rethrowing uncaught exception in WorkQueueBase "
+            << getKey() << LL_ENDL;
+
+        LL::WorkQueue::ptr_t main_queue = LL::WorkQueue::getInstance("mainloop");
+        main_queue->post(
+            // Bind the current exception, rethrow it in main loop.
+            [exc = std::current_exception()]() { std::rethrow_exception(exc); });
+    }
+#endif // else LL_WINDOWS
+}
+
+void LL::WorkQueueBase::error(const std::string& msg)
+{
+    LL_ERRS("WorkQueue") << msg << LL_ENDL;
+}
+
+void LL::WorkQueueBase::checkCoroutine(const std::string& method)
+{
+    // By convention, the default coroutine on each thread has an empty name
+    // string. See also LLCoros::logname().
+    if (LLCoros::getName().empty())
+    {
+        LLTHROW(Error("Do not call " + method + " from a thread's default coroutine"));
+    }
+}
+
+/*****************************************************************************
+*   WorkQueue
+*****************************************************************************/
+LL::WorkQueue::WorkQueue(const std::string& name, size_t capacity):
+    super(name),
+    mQueue(capacity)
+{
 }
 
 void LL::WorkQueue::close()
@@ -54,105 +238,85 @@ bool LL::WorkQueue::done()
     return mQueue.done();
 }
 
-void LL::WorkQueue::runUntilClose()
+bool LL::WorkQueue::post(const Work& callable)
 {
-    try
-    {
-        for (;;)
-        {
-            LL_PROFILE_ZONE_SCOPED_CATEGORY_THREAD;
-            callWork(mQueue.pop());
-        }
-    }
-    catch (const Queue::Closed&)
-    {
-    }
+    return mQueue.pushIfOpen(callable);
 }
 
-bool LL::WorkQueue::runPending()
+bool LL::WorkQueue::tryPost(const Work& callable)
 {
-    LL_PROFILE_ZONE_SCOPED_CATEGORY_THREAD;
-    for (Work work; mQueue.tryPop(work); )
-    {
-        callWork(work);
-    }
-    return ! mQueue.done();
+    return mQueue.tryPush(callable);
 }
 
-bool LL::WorkQueue::runOne()
+LL::WorkQueue::Work LL::WorkQueue::pop_()
 {
-    Work work;
-    if (mQueue.tryPop(work))
-    {
-        callWork(work);
-    }
-    return ! mQueue.done();
+    return mQueue.pop();
 }
 
-bool LL::WorkQueue::runUntil(const TimePoint& until)
+bool LL::WorkQueue::tryPop_(Work& work)
 {
-    LL_PROFILE_ZONE_SCOPED_CATEGORY_THREAD;
-    // Should we subtract some slop to allow for typical Work execution time?
-    // How much slop?
-    // runUntil() is simply a time-bounded runPending().
-    for (Work work; TimePoint::clock::now() < until && mQueue.tryPop(work); )
-    {
-        callWork(work);
-    }
-    return ! mQueue.done();
+    return mQueue.tryPop(work);
 }
 
-std::string LL::WorkQueue::makeName(const std::string& name)
+/*****************************************************************************
+*   WorkSchedule
+*****************************************************************************/
+LL::WorkSchedule::WorkSchedule(const std::string& name, size_t capacity):
+    super(name),
+    mQueue(capacity)
 {
-    if (! name.empty())
-        return name;
-
-    static U32 discriminator = 0;
-    static Mutex mutex;
-    U32 num;
-    {
-        // Protect discriminator from concurrent access by different threads.
-        // It can't be thread_local, else two racing threads will come up with
-        // the same name.
-        Lock lk(mutex);
-        num = discriminator++;
-    }
-    return STRINGIZE("WorkQueue" << num);
 }
 
-void LL::WorkQueue::callWork(const Queue::DataTuple& work)
+void LL::WorkSchedule::close()
 {
-    // ThreadSafeSchedule::pop() always delivers a tuple, even when
-    // there's only one data field per item, as for us.
-    callWork(std::get<0>(work));
+    mQueue.close();
 }
 
-void LL::WorkQueue::callWork(const Work& work)
+size_t LL::WorkSchedule::size()
 {
-    LL_PROFILE_ZONE_SCOPED_CATEGORY_THREAD;
-    try
-    {
-        work();
-    }
-    catch (...)
-    {
-        // No matter what goes wrong with any individual work item, the worker
-        // thread must go on! Log our own instance name with the exception.
-        LOG_UNHANDLED_EXCEPTION(getKey());
-    }
+    return mQueue.size();
 }
 
-void LL::WorkQueue::error(const std::string& msg)
+bool LL::WorkSchedule::isClosed()
 {
-    LL_ERRS("WorkQueue") << msg << LL_ENDL;
+    return mQueue.isClosed();
 }
 
-void LL::WorkQueue::checkCoroutine(const std::string& method)
+bool LL::WorkSchedule::done()
 {
-    // By convention, the default coroutine on each thread has an empty name
-    // string. See also LLCoros::logname().
-    if (LLCoros::getName().empty())
-    {
-        LLTHROW(Error("Do not call " + method + " from a thread's default coroutine"));
-    }
+    return mQueue.done();
+}
+
+bool LL::WorkSchedule::post(const Work& callable)
+{
+    // Use TimePoint::clock::now() instead of TimePoint's representation of
+    // the epoch because this WorkSchedule may contain a mix of past-due
+    // TimedWork items and TimedWork items scheduled for the future. Sift this
+    // new item into the correct place.
+    return post(callable, TimePoint::clock::now());
+}
+
+bool LL::WorkSchedule::post(const Work& callable, const TimePoint& time)
+{
+    return mQueue.pushIfOpen(TimedWork(time, callable));
+}
+
+bool LL::WorkSchedule::tryPost(const Work& callable)
+{
+    return tryPost(callable, TimePoint::clock::now());
+}
+
+bool LL::WorkSchedule::tryPost(const Work& callable, const TimePoint& time)
+{
+    return mQueue.tryPush(TimedWork(time, callable));
+}
+
+LL::WorkSchedule::Work LL::WorkSchedule::pop_()
+{
+    return std::get<0>(mQueue.pop());
+}
+
+bool LL::WorkSchedule::tryPop_(Work& work)
+{
+    return mQueue.tryPop(work);
 }

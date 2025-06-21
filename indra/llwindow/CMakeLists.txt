@@ -17,6 +17,7 @@ include(LLImage)
 include(LLWindow)
 include(UI)
 include(ViewerMiscLibs)
+include(GLM)
 
 set(llwindow_SOURCE_FILES
     llcursortypes.cpp
@@ -54,7 +55,7 @@ set(llwindow_LINK_LIBRARIES
         llrender
         llfilesystem
         llxml
-        ll::glh_linear
+        ll::glm
         ll::glext
         ll::uilibraries
         ll::SDL
@@ -127,6 +128,8 @@ if (WINDOWS)
   list(APPEND llwindow_LINK_LIBRARIES
        comdlg32     # Common Dialogs for ChooseColor
        ole32
+       dxgi
+       d3d9
        )
 endif (WINDOWS)
 
@@ -179,7 +182,6 @@ endif (SDL_FOUND)
   target_include_directories(llwindow INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
   
 if (DARWIN)
-  include(CMakeFindFrameworks)
   find_library(CARBON_LIBRARY Carbon)
   target_link_libraries(llwindow ${CARBON_LIBRARY})
 endif (DARWIN)
