@@ -68,6 +68,8 @@
 #include "llrender.h"
 #include "llnavigationbar.h"
 #include "llnotificationsutil.h"
+#include "llfloaterpreference.h"
+#include "llfloaterreg.h"
 #include "llfloatertools.h"
 #include "llpaneloutfitsinventory.h"
 #include "llpanellogin.h"
@@ -146,6 +148,21 @@ static bool handleDebugAvatarJointsChanged(const LLSD& newvalue)
 {
     std::string new_string = newvalue.asString();
     LLJoint::setDebugJointNames(new_string);
+    return true;
+}
+
+static bool handleDebugQualityPerformanceChanged(const LLSD& newvalue)
+{
+    // control was set directly or after adjusting Preference setting, no need to update
+    if (gSavedSettings.getU32("RenderQualityPerformance") != gSavedSettings.getU32("DebugQualityPerformance"))
+    {
+        LLFloaterPreference* instance = LLFloaterReg::getTypedInstance<LLFloaterPreference>("preferences");
+        if (instance)
+        {
+            gSavedSettings.setU32("RenderQualityPerformance", newvalue.asInteger());
+            instance->onChangeQuality(newvalue);
+        }
+    }
     return true;
 }
 
@@ -276,9 +293,14 @@ static bool handleLUTBufferChanged(const LLSD& newvalue)
     return true;
 }
 
-static bool handleAnisotropicChanged(const LLSD& newvalue)
+static bool handleAnisotropicFilteringChanged(const LLSD& newval)
 {
-    LLImageGL::sGlobalUseAnisotropic = newvalue.asBoolean();
+    F32 val = static_cast<F32>(newval.asReal());
+    if (val > gGLManager.mMaxAnisotropy)
+    {
+        val = llclamp(val, 0.f, gGLManager.mMaxAnisotropy);
+    }
+    LLRender::sAnisotropicFilteringLevel = val;
     LLImageGL::dirtyTexOptions();
     return true;
 }
@@ -298,6 +320,12 @@ static bool handleVSyncChanged(const LLSD& newvalue)
     }
 
     return true;
+}
+
+static bool validateAnisotropicFiltering(const LLSD& val)
+{
+    S32 filter_level = val.asInteger();
+    return filter_level == 0 || filter_level == 2 || filter_level == 4 || filter_level == 8 || filter_level == 16;
 }
 
 static bool handleVolumeLODChanged(const LLSD& newvalue)
@@ -418,16 +446,6 @@ static bool handleUploadBakedTexOldChanged(const LLSD& newvalue)
     return true;
 }
 
-
-static bool handleWLSkyDetailChanged(const LLSD&)
-{
-    if (gSky.mVOWLSkyp.notNull())
-    {
-        gSky.mVOWLSkyp->updateGeometry(gSky.mVOWLSkyp->mDrawable);
-    }
-    return true;
-}
-
 static bool handleRepartition(const LLSD&)
 {
     if (gPipeline.isInit())
@@ -447,6 +465,7 @@ static bool handleRenderDynamicLODChanged(const LLSD& newvalue)
 
 static bool handleReflectionProbeDetailChanged(const LLSD& newvalue)
 {
+    gPipeline.mReflectionMapManager.refreshSettings();
     if (gPipeline.isInit())
     {
         LLPipeline::refreshCachedSettings();
@@ -456,6 +475,12 @@ static bool handleReflectionProbeDetailChanged(const LLSD& newvalue)
         gPipeline.createGLBuffers();
         LLViewerShaderMgr::instance()->setShaders();
     }
+    return true;
+}
+
+static bool handleReflectionProbeCountChanged(const LLSD& newvalue)
+{
+    gPipeline.mReflectionMapManager.refreshSettings();
     return true;
 }
 
@@ -502,9 +527,52 @@ static bool handleDebugViewsChanged(const LLSD& newvalue)
 
 static bool handleLogFileChanged(const LLSD& newvalue)
 {
+    // UserLogFile
     std::string log_filename = newvalue.asString();
+
+    if (LLAppViewer::instance()->isSecondInstance())
+    {
+        // Second instances should not write to the primary
+        // instance's log file. Generate a unique dump log filename instead
+        if (log_filename.empty())
+        {
+            // Restore defaults.
+            log_filename = gDirUtilp->getDumpLogsDirPath(gDirUtilp->getDumpDirSessionUUID().asString() + ".log");
+        }
+        else
+        {
+            const LLUUID& uid = gDirUtilp->getDumpDirSessionUUID(); std::string dir;
+            std::string base(log_filename);
+
+            size_t slash_pos = log_filename.find_last_of("/\\");
+            if (slash_pos != std::string::npos)
+            {
+                dir = log_filename.substr(0, slash_pos + 1);
+                base = log_filename.substr(slash_pos + 1);
+            }
+
+            size_t dot_pos = base.find_last_of('.');
+            if (dot_pos != std::string::npos)
+            {
+                base = base.substr(0, dot_pos) + "_" + uid.asString() + base.substr(dot_pos);
+            }
+            else
+            {
+                base += "_" + uid.asString();
+            }
+
+            log_filename = dir + base;
+        }
+    }
+    else if (log_filename.empty())
+    {
+        // Restore default log filename if user clears the setting
+        log_filename = gDirUtilp->getExpandedFilename(LL_PATH_LOGS, "SecondLife.log");
+    }
+
     LLFile::remove(log_filename);
     LLError::logToFile(log_filename);
+
     LL_INFOS() << "Logging switched to " << log_filename << LL_ENDL;
     return true;
 }
@@ -789,6 +857,7 @@ void setting_setup_signal_listener(LLControlGroup& group, const std::string& set
 
 void settings_setup_listeners()
 {
+    LL_PROFILE_ZONE_SCOPED;
     setting_setup_signal_listener(gSavedSettings, "FirstPersonAvatarVisible", handleRenderAvatarMouselookChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderFarClip", handleRenderFarClipChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderTerrainScale", handleTerrainScaleChanged);
@@ -805,10 +874,12 @@ void settings_setup_listeners()
     setting_setup_signal_listener(gSavedSettings, "RenderUIBuffer", handleWindowResized);
     setting_setup_signal_listener(gSavedSettings, "RenderDepthOfField", handleReleaseGLBufferChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderFSAAType", handleReleaseGLBufferChanged);
+    setting_setup_signal_listener(gSavedSettings, "RenderHighPrecisionPostProcess", handleReleaseGLBufferChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderSpecularResX", handleLUTBufferChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderSpecularResY", handleLUTBufferChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderSpecularExponent", handleLUTBufferChanged);
-    setting_setup_signal_listener(gSavedSettings, "RenderAnisotropic", handleAnisotropicChanged);
+    setting_setup_signal_listener(gSavedSettings, "RenderAnisotropicLevel", handleAnisotropicFilteringChanged);
+    gSavedSettings.getControl("RenderAnisotropicLevel")->getValidateSignal()->connect(boost::bind(&validateAnisotropicFiltering, _2));
     setting_setup_signal_listener(gSavedSettings, "RenderShadowResolutionScale", handleShadowsResized);
     setting_setup_signal_listener(gSavedSettings, "RenderGlow", handleReleaseGLBufferChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderGlow", handleSetShaderChanged);
@@ -836,6 +907,7 @@ void settings_setup_listeners()
     setting_setup_signal_listener(gSavedSettings, "RenderResolutionDivisor", handleRenderResolutionDivisorChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderReflectionProbeLevel", handleReflectionProbeDetailChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderReflectionProbeDetail", handleReflectionProbeDetailChanged);
+    setting_setup_signal_listener(gSavedSettings, "RenderReflectionProbeCount", handleReflectionProbeCountChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderReflectionsEnabled", handleReflectionProbeDetailChanged);
 #if LL_DARWIN
     setting_setup_signal_listener(gSavedSettings, "RenderAppleUseMultGL", handleAppleUseMultGLChanged);
@@ -846,6 +918,7 @@ void settings_setup_listeners()
     setting_setup_signal_listener(gSavedSettings, "RenderShadowDetail", handleSetShaderChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderDeferredSSAO", handleSetShaderChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderPerformanceTest", handleRenderPerfTestChanged);
+    setting_setup_signal_listener(gSavedSettings, "RenderAvatarCloth", handleSetShaderChanged);
     setting_setup_signal_listener(gSavedSettings, "ChatFontSize", handleChatFontSizeChanged);
     setting_setup_signal_listener(gSavedSettings, "ConsoleMaxLines", handleConsoleMaxLinesChanged);
     setting_setup_signal_listener(gSavedSettings, "UploadBakedTexOld", handleUploadBakedTexOldChanged);
@@ -863,7 +936,6 @@ void settings_setup_listeners()
     setting_setup_signal_listener(gSavedSettings, "MuteVoice", handleAudioVolumeChanged);
     setting_setup_signal_listener(gSavedSettings, "MuteAmbient", handleAudioVolumeChanged);
     setting_setup_signal_listener(gSavedSettings, "MuteUI", handleAudioVolumeChanged);
-    setting_setup_signal_listener(gSavedSettings, "WLSkyDetail", handleWLSkyDetailChanged);
     setting_setup_signal_listener(gSavedSettings, "JoystickAxis0", handleJoystickChanged);
     setting_setup_signal_listener(gSavedSettings, "JoystickAxis1", handleJoystickChanged);
     setting_setup_signal_listener(gSavedSettings, "JoystickAxis2", handleJoystickChanged);
@@ -938,6 +1010,7 @@ void settings_setup_listeners()
     setting_setup_signal_listener(gSavedSettings, "SpellCheckDictionary", handleSpellCheckChanged);
     setting_setup_signal_listener(gSavedSettings, "LoginLocation", handleLoginLocationChanged);
     setting_setup_signal_listener(gSavedSettings, "DebugAvatarJoints", handleDebugAvatarJointsChanged);
+    setting_setup_signal_listener(gSavedSettings, "DebugQualityPerformance", handleDebugQualityPerformanceChanged);
 
     setting_setup_signal_listener(gSavedSettings, "TargetFPS", handleTargetFPSChanged);
     setting_setup_signal_listener(gSavedSettings, "AutoTuneFPS", handleAutoTuneFPSChanged);

@@ -538,6 +538,36 @@ LLInventoryItem* LLAgentWearables::getWearableInventoryItem(LLWearableType::ETyp
     return item;
 }
 
+const S32 LLAgentWearables::getWearableIdxFromItem(const LLViewerInventoryItem* item) const
+{
+    if (!item) return -1;
+    if (!item->isWearableType()) return -1;
+
+    LLWearableType::EType type = item->getWearableType();
+    U32 wearable_count = getWearableCount(type);
+    if (0 == wearable_count) return -1;
+
+    // Match by linked inventory item id so the correct copy is found when several
+    // worn wearables of this type share the same asset.
+    const LLUUID item_id = gInventory.getLinkedItemID(item->getUUID());
+    for (U32 i = 0; i < wearable_count; ++i)
+    {
+        const LLViewerWearable* wearable = getViewerWearable(type, i);
+        if (!wearable) continue;
+        if (wearable->getItemID() == item_id) return i;
+    }
+
+    // Fall back to asset id for items whose inventory id can't be resolved.
+    const LLUUID& asset_id = item->getAssetUUID();
+    for (U32 i = 0; i < wearable_count; ++i)
+    {
+        const LLViewerWearable* wearable = getViewerWearable(type, i);
+        if (!wearable) continue;
+        if (wearable->getAssetID() == asset_id) return i;
+    }
+
+    return -1;
+}
 const LLViewerWearable* LLAgentWearables::getWearableFromItemID(const LLUUID& item_id) const
 {
     const LLUUID& base_item_id = gInventory.getLinkedItemID(item_id);
@@ -1094,12 +1124,12 @@ void LLAgentWearables::setWearableOutfit(const LLInventoryItem::item_array_t& it
     {
         gAgentAvatarp->setCompositeUpdatesEnabled(true);
 
-        // If we have not yet declouded, we may want to use
+        // If we have not yet loaded core parts, we may want to use
         // baked texture UUIDs sent from the first objectUpdate message
-        // don't overwrite these. If we have already declouded, we've saved
-        // these ids as the last known good textures and can invalidate without
-        // re-clouding.
-        if (!gAgentAvatarp->getIsCloud())
+        // don't overwrite these. If we have parts already, we've saved
+        // these texture ids as the last known good textures and can
+        // invalidate without having to recloud avatar.
+        if (!gAgentAvatarp->getHasMissingParts())
         {
             gAgentAvatarp->invalidateAll();
         }
@@ -1471,7 +1501,7 @@ bool LLAgentWearables::moveWearable(const LLViewerInventoryItem* item, bool clos
 
     LLWearableType::EType type = item->getWearableType();
     U32 wearable_count = getWearableCount(type);
-    if (0 == wearable_count) return false;
+    if (wearable_count < 2) return false;
 
     const LLUUID& asset_id = item->getAssetUUID();
 
@@ -1506,6 +1536,37 @@ bool LLAgentWearables::moveWearable(const LLViewerInventoryItem* item, bool clos
     }
 
     return false;
+}
+
+bool LLAgentWearables::moveWearableToIndex(const LLViewerInventoryItem* item, U32 new_index)
+{
+    if (!item) return false;
+    if (!item->isWearableType()) return false;
+
+    LLWearableType::EType type = item->getWearableType();
+    U32 wearable_count = getWearableCount(type);
+    if (wearable_count < 2) return false;
+
+    if (new_index >= wearable_count) new_index = wearable_count - 1;
+
+    S32 cur = getWearableIdxFromItem(item);
+    if (cur < 0) return false;
+    if ((U32)cur == new_index) return true; // already in place
+
+    // step the wearable to its new slot one swap at a time
+    U32 pos = (U32)cur;
+    while (pos < new_index)
+    {
+        if (!swapWearables(type, pos, pos + 1)) return false;
+        ++pos;
+    }
+    while (pos > new_index)
+    {
+        if (!swapWearables(type, pos, pos - 1)) return false;
+        --pos;
+    }
+
+    return true;
 }
 
 // static

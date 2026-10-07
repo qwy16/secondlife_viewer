@@ -17,14 +17,12 @@ set(llcharacter_SOURCE_FILES
     lljointsolverrp3.cpp
     llkeyframefallmotion.cpp
     llkeyframemotion.cpp
-    llkeyframemotionparam.cpp
     llkeyframestandmotion.cpp
     llkeyframewalkmotion.cpp
     llmotioncontroller.cpp
     llmotion.cpp
     llmultigesture.cpp
     llpose.cpp
-    llstatemachine.cpp
     lltargetingmotion.cpp
     llvisualparam.cpp
     )
@@ -45,14 +43,12 @@ set(llcharacter_HEADER_FILES
     lljointstate.h
     llkeyframefallmotion.h
     llkeyframemotion.h
-    llkeyframemotionparam.h
     llkeyframestandmotion.h
     llkeyframewalkmotion.h
     llmotion.h
     llmotioncontroller.h
     llmultigesture.h
     llpose.h
-    llstatemachine.h
     lltargetingmotion.h
     llvisualparam.h
     )
@@ -70,3 +66,19 @@ target_link_libraries(
         llfilesystem
         llxml
     )
+
+if (USE_PRECOMPILED_HEADERS)
+  target_precompile_headers(llcharacter REUSE_FROM llprecompiled)
+endif ()
+
+
+if (LL_TESTS)
+  include(LLAddBuildTest)
+#   SET(llcharacter_TEST_SOURCE_FILES
+#     )
+#   LL_ADD_PROJECT_UNIT_TESTS(llcharacter "${llcharacter_TEST_SOURCE_FILES}")
+
+  #set(TEST_DEBUG on)
+  set(test_libs llcommon llmath)
+  LL_ADD_INTEGRATION_TEST(lljoint "lljoint.cpp" "${test_libs}")
+endif()

@@ -38,6 +38,13 @@
 #include "volume_catcher.h"
 #include "media_plugin_base.h"
 
+// _getpid()/getpid()
+#if LL_WINDOWS
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 #include "dullahan.h"
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -64,12 +71,13 @@ private:
     void onLoadStartCallback();
     void onRequestExitCallback();
     void onLoadEndCallback(int httpStatusCode, std::string url);
-    void onLoadError(int status, const std::string error_text);
+    void onLoadError(int status, const std::string error_text, const std::string error_url);
     void onAddressChangeCallback(std::string url);
     void onOpenPopupCallback(std::string url, std::string target);
     bool onHTTPAuthCallback(const std::string host, const std::string realm, std::string& username, std::string& password);
     void onCursorChangedCallback(dullahan::ECursorType type);
     const std::vector<std::string> onFileDialog(dullahan::EFileDialogType dialog_type, const std::string dialog_title, const std::string default_file, const std::string dialog_accept_filter, bool& use_default);
+    void onFileDownloadProgressCallback(int percent, bool complete);
     bool onJSDialogCallback(const std::string origin_url, const std::string message_text, const std::string default_prompt_text);
     bool onJSBeforeUnloadCallback();
 
@@ -99,14 +107,17 @@ private:
     std::string mAuthUsername;
     std::string mAuthPassword;
     bool mAuthOK;
+    bool mCanUndo;
+    bool mCanRedo;
     bool mCanCut;
     bool mCanCopy;
     bool mCanPaste;
+    bool mCanDelete;
+    bool mCanSelectAll;
     std::string mRootCachePath;
-    std::string mCachePath;
-    std::string mContextCachePath;
     std::string mCefLogFile;
     bool mCefLogVerbose;
+    U32 mCefRemoteDebuggingPort;
     std::vector<std::string> mPickedFiles;
     VolumeCatcher mVolumeCatcher;
     F32 mCurVolume;
@@ -139,12 +150,16 @@ MediaPluginBase(host_send_func, host_user_data)
     mAuthUsername = "";
     mAuthPassword = "";
     mAuthOK = false;
+    mCanUndo = false;
+    mCanRedo = false;
     mCanCut = false;
     mCanCopy = false;
     mCanPaste = false;
-    mCachePath = "";
+    mCanDelete = false;
+    mCanSelectAll = false;
     mCefLogFile = "";
     mCefLogVerbose = false;
+    mCefRemoteDebuggingPort = 0;
     mPickedFiles.clear();
     mCurVolume = 0.0;
 
@@ -242,15 +257,17 @@ void MediaPluginCEF::onLoadStartCallback()
 
 /////////////////////////////////////////////////////////////////////////////////
 //
-void MediaPluginCEF::onLoadError(int status, const std::string error_text)
+void MediaPluginCEF::onLoadError(int status, const std::string error_text, const std::string error_url)
 {
     std::stringstream msg;
 
-    msg << "<b>Loading error!</b>";
+    msg << "<b>Loading error</b>";
     msg << "<p>";
-    msg << "Message: " << error_text;
-    msg << "<br>";
-    msg << "Code: " << status;
+    msg << "Error message: " << error_text;
+    msg << "<p>";
+    msg << "Error URL: <tt>" << error_url << "</tt>";
+    msg << "<p>";
+    msg << "Error code: " << status;
 
     mCEFLib->showBrowserMessage(msg.str());
 }
@@ -384,6 +401,16 @@ const std::vector<std::string> MediaPluginCEF::onFileDialog(dullahan::EFileDialo
     }
 
     return std::vector<std::string>();
+}
+
+////////////////////////////////////////////////////////////////////////////////
+//
+void MediaPluginCEF::onFileDownloadProgressCallback(int percent, bool complete)
+{
+    LLPluginMessage message(LLPLUGIN_MESSAGE_CLASS_MEDIA, "file_download_progress");
+    message.setValueS32("percent", percent);
+    message.setValueBoolean("complete", complete);
+    sendMessage(message);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -607,11 +634,17 @@ void MediaPluginCEF::receiveMessage(const char* message_string)
                 mCEFLib->setOnTooltipCallback(std::bind(&MediaPluginCEF::onTooltipCallback, this, std::placeholders::_1));
                 mCEFLib->setOnLoadStartCallback(std::bind(&MediaPluginCEF::onLoadStartCallback, this));
                 mCEFLib->setOnLoadEndCallback(std::bind(&MediaPluginCEF::onLoadEndCallback, this, std::placeholders::_1, std::placeholders::_2));
-                mCEFLib->setOnLoadErrorCallback(std::bind(&MediaPluginCEF::onLoadError, this, std::placeholders::_1, std::placeholders::_2));
+
+                // CEF 139 seems to have introduced a loading failure at the login page (only?) I haven't seen it on
+                // any other page and it only happens about 1 in 8 times. Without this handler for the error page
+                // (red box, error message/code/url) the page load recovers after display a brief built in error.
+                // Not ideal but better than stopping altgoether. Will restore this once I discover the error.
+                //mCEFLib->setOnLoadErrorCallback(std::bind(&MediaPluginCEF::onLoadError, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
                 mCEFLib->setOnAddressChangeCallback(std::bind(&MediaPluginCEF::onAddressChangeCallback, this, std::placeholders::_1));
                 mCEFLib->setOnOpenPopupCallback(std::bind(&MediaPluginCEF::onOpenPopupCallback, this, std::placeholders::_1, std::placeholders::_2));
                 mCEFLib->setOnHTTPAuthCallback(std::bind(&MediaPluginCEF::onHTTPAuthCallback, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4));
                 mCEFLib->setOnFileDialogCallback(std::bind(&MediaPluginCEF::onFileDialog, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5));
+                mCEFLib->setOnFileDownloadProgressCallback(std::bind(&MediaPluginCEF::onFileDownloadProgressCallback, this, std::placeholders::_1, std::placeholders::_2));
                 mCEFLib->setOnCursorChangedCallback(std::bind(&MediaPluginCEF::onCursorChangedCallback, this, std::placeholders::_1));
                 mCEFLib->setOnRequestExitCallback(std::bind(&MediaPluginCEF::onRequestExitCallback, this));
                 mCEFLib->setOnJSDialogCallback(std::bind(&MediaPluginCEF::onJSDialogCallback, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
@@ -635,10 +668,7 @@ void MediaPluginCEF::receiveMessage(const char* message_string)
                 // and set it to white
                 settings.background_color = 0xffffffff; // white
 
-                settings.cache_enabled = true;
                 settings.root_cache_path = mRootCachePath;
-                settings.cache_path = mCachePath;
-                settings.context_cache_path = mContextCachePath;
                 settings.cookies_enabled = mCookiesEnabled;
 
                 // configure proxy argument if enabled and valid
@@ -693,6 +723,8 @@ void MediaPluginCEF::receiveMessage(const char* message_string)
                 settings.webgl_enabled = true;
                 settings.log_file = mCefLogFile;
                 settings.log_verbose = mCefLogVerbose;
+                settings.enable_remote_debug = (mCefRemoteDebuggingPort != 0);
+                settings.remote_debugging_port = mCefRemoteDebuggingPort;
                 settings.autoplay_without_gesture = true;
 
                 std::vector<std::string> custom_schemes(1, "secondlife");
@@ -729,25 +761,35 @@ void MediaPluginCEF::receiveMessage(const char* message_string)
                 std::string user_data_path_cache = message_in.getValue("cache_path");
                 std::string subfolder = message_in.getValue("username");
 
-                mRootCachePath = user_data_path_cache + "cef_cache";
-                if (!subfolder.empty())
-                {
-                    std::string delim;
+                // media plugin doesn't have access to gDirUtilp
+                std::string path_separator;
 #if LL_WINDOWS
-                    // media plugin doesn't have access to gDirUtilp
-                    delim = "\\";
+                path_separator = "\\";
 #else
-                    delim = "/";
+                path_separator = "/";
 #endif
-                    mCachePath = mRootCachePath + delim + subfolder;
-                }
-                else
-                {
-                    mCachePath = mRootCachePath;
-                }
-                mContextCachePath = ""; // disabled by ""
+
+                mRootCachePath = user_data_path_cache + "cef_cache";
+
+                // Issue #4498 Introduce an additional sub-folder underneath the main cache
+                // folder so that each CEF media instance gets its own (as per the CEF API
+                // official position). These folders will be removed at startup by Viewer code
+                // so that their non-trivial size does not exhaust available disk space. This
+                // begs the question - why turn on the cache at all? There are 2 reasons - firstly
+                // some of the instances will benefit from per Viewer session caching and will
+                // use the injected SL cookie and secondly, it's not clear how having no cache
+                // interacts with the multiple simultaneous paradigm we use.
+                mRootCachePath += path_separator;
+# if LL_WINDOWS
+                mRootCachePath += std::to_string(_getpid());
+# else
+                mRootCachePath += std::to_string(getpid());
+# endif
+
+
                 mCefLogFile = message_in.getValue("cef_log_file");
                 mCefLogVerbose = message_in.getValueBoolean("cef_verbose_log");
+                mCefRemoteDebuggingPort = message_in.getValueU32("cef_remote_debugging_port");
             }
             else if (message_name == "size_change")
             {
@@ -886,7 +928,7 @@ void MediaPluginCEF::receiveMessage(const char* message_string)
 
                 keyEvent(key_event, native_key_data);
 
-#elif LL_WINDOWS
+#else
                 std::string event = message_in.getValue("event");
                 LLSD native_key_data = message_in.getValueLLSD("native_key_data");
 
@@ -908,6 +950,13 @@ void MediaPluginCEF::receiveMessage(const char* message_string)
             {
                 mEnableMediaPluginDebugging = message_in.getValueBoolean("enable");
             }
+#if LL_LINUX
+            else if (message_name == "enable_pipewire_volume_catcher")
+            {
+                bool enable = message_in.getValueBoolean("enable");
+                mVolumeCatcher.onEnablePipeWireVolumeCatcher(enable);
+            }
+#endif
             if (message_name == "pick_file_response")
             {
                 LLSD file_list_llsd = message_in.getValueLLSD("file_list");
@@ -923,6 +972,14 @@ void MediaPluginCEF::receiveMessage(const char* message_string)
             {
                 authResponse(message_in);
             }
+            if (message_name == "edit_undo")
+            {
+                mCEFLib->editUndo();
+            }
+            if (message_name == "edit_redo")
+            {
+                mCEFLib->editRedo();
+            }
             if (message_name == "edit_cut")
             {
                 mCEFLib->editCut();
@@ -934,6 +991,18 @@ void MediaPluginCEF::receiveMessage(const char* message_string)
             if (message_name == "edit_paste")
             {
                 mCEFLib->editPaste();
+            }
+            if (message_name == "edit_delete")
+            {
+                mCEFLib->editDelete();
+            }
+            if (message_name == "edit_select_all")
+            {
+                mCEFLib->editSelectAll();
+            }
+            if (message_name == "edit_show_source")
+            {
+                mCEFLib->viewSource();
             }
         }
         else if (message_class == LLPLUGIN_MESSAGE_CLASS_MEDIA_BROWSER)
@@ -1050,6 +1119,28 @@ void MediaPluginCEF::keyEvent(dullahan::EKeyEvent key_event, LLSD native_key_dat
 
     mCEFLib->nativeKeyboardEventWin(msg, wparam, lparam);
 #endif
+
+#if LL_LINUX
+
+    uint32_t native_virtual_key = (uint32_t)(native_key_data["virtual_key"].asInteger());       // this is actually the SDL event.key.keysym.sym;
+    uint32_t native_virtual_key_win = (uint32_t)(native_key_data["virtual_key_win"].asInteger());
+    uint32_t native_modifiers = (uint32_t)(native_key_data["modifiers"].asInteger());
+
+    // only for non-printable keysyms, the actual text input is done in unicodeInput() below
+    if (native_virtual_key <= 0x1b || native_virtual_key >= 0x7f)
+    {
+        // set keypad flag, not sure if this even does anything
+        bool keypad = false;
+        if (native_virtual_key_win >= 0x60 && native_virtual_key_win <= 0x6f)
+        {
+            keypad = true;
+        }
+
+        // yes, we send native_virtual_key_win twice because native_virtual_key breaks it
+        mCEFLib->nativeKeyboardEventSDL2(key_event, native_virtual_key, native_modifiers, keypad);
+    }
+
+#endif // LL_LINUX
 };
 
 void MediaPluginCEF::unicodeInput(std::string event, LLSD native_key_data = LLSD::emptyMap())
@@ -1080,19 +1171,46 @@ void MediaPluginCEF::unicodeInput(std::string event, LLSD native_key_data = LLSD
     U64 lparam = ll_U32_from_sd(native_key_data["l_param"]);
     mCEFLib->nativeKeyboardEventWin(msg, wparam, lparam);
 #endif
+
+#if LL_LINUX
+
+    uint32_t native_scan_code = (uint32_t)(native_key_data["sdl_sym"].asInteger());
+    uint32_t native_virtual_key = (uint32_t)(native_key_data["virtual_key"].asInteger());
+    uint32_t native_modifiers = (uint32_t)(native_key_data["modifiers"].asInteger());
+
+    mCEFLib->nativeKeyboardEvent(dullahan::KE_KEY_DOWN, native_scan_code, native_virtual_key, native_modifiers);
+
+#endif // LL_LINUX
 };
 
 ////////////////////////////////////////////////////////////////////////////////
 //
 void MediaPluginCEF::checkEditState()
 {
+    bool can_undo = mCEFLib->editCanUndo();
+    bool can_redo = mCEFLib->editCanRedo();
     bool can_cut = mCEFLib->editCanCut();
     bool can_copy = mCEFLib->editCanCopy();
     bool can_paste = mCEFLib->editCanPaste();
+    bool can_delete = mCEFLib->editCanDelete();
+    bool can_select_all = mCEFLib->editCanSelectAll();
 
-    if ((can_cut != mCanCut) || (can_copy != mCanCopy) || (can_paste != mCanPaste))
+    if ((can_undo != mCanUndo) || (can_redo != mCanRedo) || (can_cut != mCanCut) || (can_copy != mCanCopy)
+        || (can_paste != mCanPaste) || (can_delete != mCanDelete) || (can_select_all != mCanSelectAll))
     {
         LLPluginMessage message(LLPLUGIN_MESSAGE_CLASS_MEDIA, "edit_state");
+
+        if (can_undo != mCanUndo)
+        {
+            mCanUndo = can_undo;
+            message.setValueBoolean("undo", can_undo);
+        }
+
+        if (can_redo != mCanRedo)
+        {
+            mCanRedo = can_redo;
+            message.setValueBoolean("redo", can_redo);
+        }
 
         if (can_cut != mCanCut)
         {
@@ -1110,6 +1228,18 @@ void MediaPluginCEF::checkEditState()
         {
             mCanPaste = can_paste;
             message.setValueBoolean("paste", can_paste);
+        }
+
+        if (can_delete != mCanDelete)
+        {
+            mCanDelete = can_delete;
+            message.setValueBoolean("delete", can_delete);
+        }
+
+        if (can_select_all != mCanSelectAll)
+        {
+            mCanSelectAll = can_select_all;
+            message.setValueBoolean("select_all", can_select_all);
         }
 
         sendMessage(message);

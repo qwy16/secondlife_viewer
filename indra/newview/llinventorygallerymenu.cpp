@@ -110,6 +110,7 @@ LLContextMenu* LLInventoryGalleryContextMenu::createMenu()
     registrar.add("Inventory.Share", boost::bind(&LLAvatarActions::shareWithAvatars, uuids, gFloaterView->getParentFloater(mGallery)));
 
     enable_registrar.add("Inventory.CanSetUploadLocation", boost::bind(&LLInventoryGalleryContextMenu::canSetUploadLocation, this, _2));
+    enable_registrar.add("Inventory.FileUploadLocation.Check", boost::bind(&LLInventoryGalleryContextMenu::isUploadLocationSelected, this, _2));
 
     enable_registrar.add("Inventory.EnvironmentEnabled", [](LLUICtrl*, const LLSD&)
                          {
@@ -250,6 +251,20 @@ void LLInventoryGalleryContextMenu::doToSelected(const LLSD& userdata)
     {
         ungroup_folder_items(mUUIDs.front());
     }
+    else if ("add_to_favorites" == action)
+    {
+        for (const LLUUID& id : mUUIDs)
+        {
+            set_favorite(id, true);
+        }
+    }
+    else if ("remove_from_favorites" == action)
+    {
+        for (const LLUUID& id : mUUIDs)
+        {
+            set_favorite(id, false);
+        }
+    }
     else if ("replaceoutfit" == action)
     {
         modify_outfit(false, mUUIDs.front(), &gInventory);
@@ -319,18 +334,25 @@ void LLInventoryGalleryContextMenu::doToSelected(const LLSD& userdata)
     }
     else if ("copy_slurl" == action)
     {
-        boost::function<void(LLLandmark*)> copy_slurl_cb = [](LLLandmark* landmark)
+        std::function<void(LLLandmark*)> copy_slurl_cb = [](LLLandmark* landmark)
         {
             LLVector3d global_pos;
             landmark->getGlobalPos(global_pos);
-            boost::function<void(std::string& slurl)> copy_slurl_to_clipboard_cb = [](const std::string& slurl)
+            if (!global_pos.isExactlyZero())
             {
-               gViewerWindow->getWindow()->copyTextToClipboard(utf8str_to_wstring(slurl));
-               LLSD args;
-               args["SLURL"] = slurl;
-               LLNotificationsUtil::add("CopySLURL", args);
-            };
-            LLLandmarkActions::getSLURLfromPosGlobal(global_pos, copy_slurl_to_clipboard_cb, true);
+                std::function<void(std::string& slurl)> copy_slurl_to_clipboard_cb = [](const std::string& slurl)
+                {
+                    gViewerWindow->getWindow()->copyTextToClipboard(utf8str_to_wstring(slurl));
+                    LLSD args;
+                    args["SLURL"] = slurl;
+                    LLNotificationsUtil::add("CopySLURL", args);
+                };
+                LLLandmarkActions::getSLURLfromPosGlobal(global_pos, copy_slurl_to_clipboard_cb, true);
+            }
+            else
+            {
+                LLNotificationsUtil::add("LandmarkLocationUnknown");
+            }
         };
         LLLandmark* landmark = LLLandmarkActions::getLandmark(mUUIDs.front(), copy_slurl_cb);
         if (landmark)
@@ -347,7 +369,7 @@ void LLInventoryGalleryContextMenu::doToSelected(const LLSD& userdata)
     }
     else if ("show_on_map" == action)
     {
-        boost::function<void(LLLandmark*)> show_on_map_cb = [](LLLandmark* landmark)
+        std::function<void(LLLandmark*)> show_on_map_cb = [](LLLandmark* landmark)
         {
             LLVector3d landmark_global_pos;
             if (landmark->getGlobalPos(landmark_global_pos))
@@ -385,7 +407,7 @@ void LLInventoryGalleryContextMenu::doToSelected(const LLSD& userdata)
 
         if (can_copy)
         {
-            const LLUUID& marketplacelistings_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+            const LLUUID& marketplacelistings_id = gInventory.getMarketplaceListingsUUID();
             if (itemp)
             {
                 move_item_to_marketplacelistings(itemp, marketplacelistings_id, copy_operation);
@@ -404,7 +426,7 @@ void LLInventoryGalleryContextMenu::doToSelected(const LLSD& userdata)
                     // option == 0  Move no copy item(s)
                     // option == 1  Don't move no copy item(s) (leave them behind)
                     bool copy_and_move = option == 0;
-                    const LLUUID& marketplacelistings_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+                    const LLUUID& marketplacelistings_id = gInventory.getMarketplaceListingsUUID();
 
                     // main inventory only allows one item?
                     LLViewerInventoryItem* itemp = gInventory.getItem(lamdba_list.front());
@@ -472,22 +494,13 @@ void LLInventoryGalleryContextMenu::onRename(const LLSD& notification, const LLS
 void LLInventoryGalleryContextMenu::fileUploadLocation(const LLSD& userdata)
 {
     const std::string param = userdata.asString();
-    if (param == "model")
-    {
-        gSavedPerAccountSettings.setString("ModelUploadFolder", mUUIDs.front().asString());
-    }
-    else if (param == "texture")
-    {
-        gSavedPerAccountSettings.setString("TextureUploadFolder", mUUIDs.front().asString());
-    }
-    else if (param == "sound")
-    {
-        gSavedPerAccountSettings.setString("SoundUploadFolder", mUUIDs.front().asString());
-    }
-    else if (param == "animation")
-    {
-        gSavedPerAccountSettings.setString("AnimationUploadFolder", mUUIDs.front().asString());
-    }
+    LLInventoryAction::fileUploadLocation(mUUIDs.front(), param);
+}
+
+bool LLInventoryGalleryContextMenu::isUploadLocationSelected(const LLSD& userdata)
+{
+    const std::string param = userdata.asString();
+    return LLInventoryAction::isFileUploadLocation(mUUIDs.front(), param);
 }
 
 bool LLInventoryGalleryContextMenu::canSetUploadLocation(const LLSD& userdata)
@@ -529,7 +542,7 @@ bool can_list_on_marketplace(const LLUUID &id)
         if (can_list)
         {
             std::string error_msg;
-            const LLUUID& marketplacelistings_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+            const LLUUID& marketplacelistings_id = gInventory.getMarketplaceListingsUUID();
             if (marketplacelistings_id.notNull())
             {
                 LLViewerInventoryCategory* master_folder = gInventory.getCategory(marketplacelistings_id);
@@ -597,20 +610,23 @@ void LLInventoryGalleryContextMenu::updateMenuItemsVisibility(LLContextMenu* men
     bool has_children = false;
     bool is_full_perm_item = false;
     bool is_copyable = false;
-    LLViewerInventoryItem* selected_item = gInventory.getItem(selected_id);
+
+    LLViewerInventoryCategory* selected_category = nullptr;
+    LLViewerInventoryItem* selected_item = nullptr;
 
     if(is_folder)
     {
-        LLInventoryCategory* category = gInventory.getCategory(selected_id);
-        if (category)
+        selected_category = dynamic_cast<LLViewerInventoryCategory*>(obj);
+        if (selected_category)
         {
-            folder_type = category->getPreferredType();
+            folder_type = selected_category->getPreferredType();
             is_system_folder = LLFolderType::lookupIsProtectedType(folder_type);
             has_children = (gInventory.categoryHasChildren(selected_id) != LLInventoryModel::CHILDREN_NO);
         }
     }
     else
     {
+        selected_item = dynamic_cast<LLViewerInventoryItem*>(obj);
         if (selected_item)
         {
             is_full_perm_item = selected_item->getIsFullPerm();
@@ -729,8 +745,7 @@ void LLInventoryGalleryContextMenu::updateMenuItemsVisibility(LLContextMenu* men
     {
         if (is_agent_inventory && !is_inbox && !is_cof && !is_in_favorites && !is_outfits && !is_in_outfits)
         {
-            LLViewerInventoryCategory* category = gInventory.getCategory(selected_id);
-            if (!category || !LLFriendCardsManager::instance().isCategoryInFriendFolder(category))
+            if (!selected_category || !LLFriendCardsManager::instance().isCategoryInFriendFolder(selected_category))
             {
                 items.push_back(std::string("New Folder"));
             }
@@ -758,6 +773,22 @@ void LLInventoryGalleryContextMenu::updateMenuItemsVisibility(LLContextMenu* men
             if (inventory_linking)
             {
                 items.push_back(std::string("Paste As Link"));
+
+                if (selected_item)
+                {
+                    if (!LLAssetType::lookupCanLink(selected_item->getActualType()))
+                    {
+                        disabled_items.push_back(std::string("Paste As Link"));
+                    }
+                    else if (gInventory.isObjectDescendentOf(selected_item->getUUID(), gInventory.getLibraryRootFolderID()))
+                    {
+                        disabled_items.push_back(std::string("Paste As Link"));
+                    }
+                }
+                else if (selected_category && LLFolderType::lookupIsProtectedType(selected_category->getPreferredType()))
+                {
+                    disabled_items.push_back(std::string("Paste As Link"));
+                }
             }
         }
         if (is_folder && is_agent_inventory)
@@ -768,6 +799,7 @@ void LLInventoryGalleryContextMenu::updateMenuItemsVisibility(LLContextMenu* men
                 {
                     items.push_back(std::string("New Folder"));
                 }
+                items.push_back(std::string("upload_options"));
                 items.push_back(std::string("upload_def"));
             }
 
@@ -784,6 +816,18 @@ void LLInventoryGalleryContextMenu::updateMenuItemsVisibility(LLContextMenu* men
                 if (!get_is_category_and_children_removable(&gInventory, selected_id, false))
                 {
                     disabled_items.push_back(std::string("Delete"));
+                }
+            }
+
+            if (!is_trash && !is_in_trash && gInventory.getRootFolderID() != selected_id)
+            {
+                if (get_is_favorite(obj))
+                {
+                    items.push_back(std::string("Remove from Favorites"));
+                }
+                else
+                {
+                    items.push_back(std::string("Add to Favorites"));
                 }
             }
 
@@ -832,6 +876,17 @@ void LLInventoryGalleryContextMenu::updateMenuItemsVisibility(LLContextMenu* men
             if(is_agent_inventory)
             {
                 items.push_back(std::string("Cut"));
+                if (!is_in_trash)
+                {
+                    if (get_is_favorite(obj))
+                    {
+                        items.push_back(std::string("Remove from Favorites"));
+                    }
+                    else
+                    {
+                        items.push_back(std::string("Add to Favorites"));
+                    }
+                }
                 if (!is_link || !is_cof || !get_is_item_worn(selected_id))
                 {
                     items.push_back(std::string("Delete"));
@@ -968,6 +1023,7 @@ void LLInventoryGalleryContextMenu::updateMenuItemsVisibility(LLContextMenu* men
             }
 
             disabled_items.push_back(std::string("New Folder"));
+            disabled_items.push_back(std::string("upload_options"));
             disabled_items.push_back(std::string("upload_def"));
             disabled_items.push_back(std::string("create_new"));
         }
@@ -984,14 +1040,13 @@ void LLInventoryGalleryContextMenu::updateMenuItemsVisibility(LLContextMenu* men
 
         // Marketplace
         bool can_list = false;
-        const LLUUID marketplacelistings_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+        const LLUUID marketplacelistings_id = gInventory.getMarketplaceListingsUUID();
         if (marketplacelistings_id.notNull() && !is_inbox && !obj->getIsLinkType())
         {
             if (is_folder)
             {
-                LLViewerInventoryCategory* cat = gInventory.getCategory(selected_id);
-                if (cat
-                    && !LLFolderType::lookupIsProtectedType(cat->getPreferredType())
+                if (selected_category
+                    && !LLFolderType::lookupIsProtectedType(selected_category->getPreferredType())
                     && gInventory.isObjectDescendentOf(selected_id, gInventory.getRootFolderID()))
                 {
                     can_list = true;
@@ -1017,6 +1072,15 @@ void LLInventoryGalleryContextMenu::updateMenuItemsVisibility(LLContextMenu* men
                 disabled_items.push_back(std::string("Marketplace Copy"));
                 disabled_items.push_back(std::string("Marketplace Move"));
             }
+        }
+
+        if (get_is_favorite(obj))
+        {
+            items.push_back(std::string("Remove from Favorites"));
+        }
+        else if (is_agent_inventory)
+        {
+            items.push_back(std::string("Add to Favorites"));
         }
     }
 

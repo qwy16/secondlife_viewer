@@ -28,20 +28,7 @@
 #ifndef LLPROCESSOR_H
 #define LLPROCESSOR_H
 #include "llunits.h"
-
-#if LL_MSVC && _M_X64
-#      define LL_X86_64 1
-#      define LL_X86 1
-#elif LL_MSVC && _M_IX86
-#      define LL_X86 1
-#elif LL_GNUC && ( defined(__amd64__) || defined(__x86_64__) )
-#      define LL_X86_64 1
-#      define LL_X86 1
-#elif LL_GNUC && ( defined(__i386__) )
-#      define LL_X86 1
-#elif LL_GNUC && ( defined(__powerpc__) || defined(__ppc__) )
-#      define LL_PPC 1
-#endif
+#include "llpreprocessor.h"
 
 class LLProcessorInfoImpl;
 
@@ -59,6 +46,9 @@ public:
     bool hasSSE41() const;
     bool hasSSE42() const;
     bool hasSSE4a() const;
+    bool hasAVX() const;
+    bool hasAVX2() const;
+    bool hasAVX512F() const;
     bool hasAltivec() const;
     std::string getCPUFamilyName() const;
     std::string getCPUBrandName() const;

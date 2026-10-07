@@ -30,7 +30,6 @@
 
 #include "llstring.h"
 #include "llinitparam.h"
-#include <boost/function.hpp>
 
 namespace LLTextValidate
 {
@@ -89,7 +88,7 @@ namespace LLTextValidate
     extern Validator validateASCIIPrintableNoSpace;
     extern Validator validateASCII;
     extern Validator validateASCIINoLeadingSpace;
-    extern Validator validateASCIIWithNewLine;
+    extern Validator validateASCIIWithNewLineNoPipe;
 
     // Add available validators to the internal map
     struct Validators : public LLInitParam::TypeValuesHelper<Validator, Validators>

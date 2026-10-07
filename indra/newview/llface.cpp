@@ -58,12 +58,6 @@
 #include "llmeshrepository.h"
 #include "llskinningutil.h"
 
-#if LL_LINUX
-// Work-around spurious used before init warning on Vector4a
-//
-#pragma GCC diagnostic ignored "-Wuninitialized"
-#endif
-
 #define LL_MAX_INDICES_COUNT 1000000
 
 static LLStaticHashedString sTextureIndexIn("texture_index_in");
@@ -646,7 +640,7 @@ void LLFace::renderOneWireframe(const LLColor4 &color, F32 fogCfx, bool wirefram
 
         LLGLEnable offset(GL_POLYGON_OFFSET_LINE);
         glPolygonOffset(3.f, 3.f);
-        glLineWidth(5.f);
+        gGL.setLineWidth(5.f);
         glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
         renderFace(mDrawablep, this);
     }
@@ -767,9 +761,6 @@ static void xform4a(LLVector4a &tex_coord, const LLVector4a& trans, const LLVect
     // Texture transforms are done about the center of the face.
     st.setAdd(tex_coord, trans);
 
-    // Handle rotation
-    LLVector4a rot_st;
-
     // <s0 * cosAng, s0*-sinAng, s1*cosAng, s1*-sinAng>
     LLVector4a s0;
     s0.splat(st, 0);
@@ -842,7 +833,6 @@ bool LLFace::genVolumeBBoxes(const LLVolume &volume, S32 f,
         //VECTORIZE THIS
         LLMatrix4a mat_vert;
         mat_vert.loadu(mat_vert_in);
-        LLVector4a new_extents[2];
 
         llassert(less_than_max_mag(face.mExtents[0]));
         llassert(less_than_max_mag(face.mExtents[1]));
@@ -1068,6 +1058,91 @@ bool LLFace::calcAlignedPlanarTE(const LLFace* align_to,  LLVector2* res_st_offs
 
     st_scale /= this_proj_scale;
     *res_st_scale = (LLVector2)st_scale;
+    return true;
+}
+
+F32 dot_product(const LLVector3& a, const LLVector3& b)
+{
+    return a.mV[VX] * b.mV[VX] + a.mV[VY] * b.mV[VY] + a.mV[VZ] * b.mV[VZ];
+}
+
+bool LLFace::calcAlignedPlanarGLTF(
+    const LLFace* align_to,
+    LLVector2* res_st_offset,
+    LLVector2* res_st_scale,
+    F32* res_st_rot,
+    S32 gltf_info_index) const
+{
+    if (!align_to)
+    {
+        return false;
+    }
+
+    const LLTextureEntry* orig_tep = align_to->getTextureEntry();
+    const LLTextureEntry* tep = getTextureEntry();
+    if (!orig_tep || !tep)
+    {
+        return false;
+    }
+
+    // Only support planar mapping for now
+    if (orig_tep->getTexGen() != LLTextureEntry::TEX_GEN_PLANAR ||
+        tep->getTexGen() != LLTextureEntry::TEX_GEN_PLANAR)
+    {
+        return false;
+    }
+
+    LLGLTFMaterial* orig_mat = orig_tep->getGLTFRenderMaterial();
+    LLGLTFMaterial* this_mat = tep->getGLTFRenderMaterial();
+    if (!orig_mat || !this_mat)
+    {
+        return false;
+    }
+
+    // Get the original GLTF transform for the specified channel
+    const auto& orig_tt = orig_mat->mTextureTransform[gltf_info_index];
+
+    // Convert GLTF transform to legacy TE transform
+    F32 map_scaleS, map_scaleT, map_offsS, map_offsT, map_rot;
+    LLGLTFMaterial::convertPBRTransformToTexture(
+        orig_tt.mScale,
+        orig_tt.mOffset,
+        orig_tt.mRotation,
+        map_scaleS, map_scaleT, map_offsS, map_offsT, map_rot);
+
+    // Calculate aligments
+    LLVector3 orig_pos, this_pos;
+    LLQuaternion orig_face_rot, this_face_rot;
+    F32 orig_proj_scale, this_proj_scale;
+    align_to->getPlanarProjectedParams(&orig_face_rot, &orig_pos, &orig_proj_scale);
+    getPlanarProjectedParams(&this_face_rot, &this_pos, &this_proj_scale);
+
+    // The rotation of "this face's" texture:
+    LLQuaternion orig_st_rot = LLQuaternion(map_rot, LLVector3::z_axis) * orig_face_rot;
+    LLQuaternion this_st_rot = orig_st_rot * ~this_face_rot;
+    F32 x_ang, y_ang, z_ang;
+    this_st_rot.getEulerAngles(&x_ang, &y_ang, &z_ang);
+
+    // Offset and scale of "this face's" texture:
+    LLVector3 centers_dist = (this_pos - orig_pos) * ~orig_st_rot;
+    LLVector3 st_scale(map_scaleS, map_scaleT, 1.f);
+    st_scale *= orig_proj_scale;
+    centers_dist.scaleVec(st_scale);
+    LLVector2 orig_st_offset(map_offsS, map_offsT);
+
+    LLVector2 tex_res_st_offset = orig_st_offset + (LLVector2)centers_dist;
+    tex_res_st_offset.mV[VX] -= (S32)tex_res_st_offset.mV[VX];
+    tex_res_st_offset.mV[VY] -= (S32)tex_res_st_offset.mV[VY];
+
+    st_scale /= this_proj_scale;
+
+    // Convert aligned legacy TE transform back to GLTF transform
+    LLGLTFMaterial::convertTextureTransformToPBR(
+        st_scale.mV[0], st_scale.mV[1],
+        tex_res_st_offset.mV[0], tex_res_st_offset.mV[1],
+        z_ang,
+        *res_st_scale, *res_st_offset, *res_st_rot);
+
     return true;
 }
 
@@ -1405,11 +1480,11 @@ bool LLFace::getGeometryVolume(const LLVolume& volume,
             // They are used only to display a face selection marker
             // (white square with a rounded cross at the center)
             const auto& tt = gltf_mat->mTextureTransform[gltf_info_index];
-            r = -tt.mRotation * 2;
-            ms = tt.mScale[VX];
-            mt = tt.mScale[VY];
-            os += tt.mOffset[VX] + (ms - 1) / 2;
-            ot -= tt.mOffset[VY] + (mt - 1) / 2;
+            LLGLTFMaterial::convertPBRTransformToTexture(
+                tt.mScale,
+                tt.mOffset,
+                tt.mRotation,
+                ms, mt, os, ot, r);
         }
         else
         {
@@ -2255,8 +2330,6 @@ bool LLFace::calcPixelArea(F32& cos_angle_to_view_dir, F32& radius)
 
                         if (joint)
                         {
-                            LLVector4a jointPos;
-
                             LLMatrix4a worldMat;
                             worldMat.loadu((F32*)&joint->getWorldMatrix().mMatrix[0][0]);
 
@@ -2384,7 +2457,11 @@ F32 LLFace::adjustPartialOverlapPixelArea(F32 cos_angle_to_view_dir, F32 radius 
 
         //the above calculation is too expensive
         //the below is a good estimation: bounding box of the bounding sphere:
-        F32 alpha = 0.5f * (radius + screen_radius - d) / radius ;
+        F32 alpha = 1.f;
+        if (!is_approx_zero(radius)) // radius can be something like -1e-10
+        {
+            alpha = 0.5f * (radius + screen_radius - d) / radius;
+        }
         alpha = llclamp(alpha, 0.f, 1.f) ;
         return alpha * alpha ;
     }

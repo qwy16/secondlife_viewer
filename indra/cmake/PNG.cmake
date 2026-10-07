@@ -1,14 +1,19 @@
 # -*- cmake -*-
 include(Prebuilt)
+include(Linking)
+include(ZLIBNG)
 
 include_guard()
 add_library( ll::libpng INTERFACE IMPORTED )
 
 use_system_binary(libpng)
 use_prebuilt_binary(libpng)
-if (WINDOWS)
-  target_link_libraries(ll::libpng INTERFACE ${ARCH_PREBUILT_DIRS_RELEASE}/libpng16.lib)
-else()
-  target_link_libraries(ll::libpng INTERFACE ${ARCH_PREBUILT_DIRS_RELEASE}/libpng16.a)
-endif()
-target_include_directories( ll::libpng SYSTEM INTERFACE ${LIBS_PREBUILT_DIR}/include/libpng16)
+
+find_library(LIBPNG_LIBRARY
+    NAMES
+    libpng16.lib
+    libpng16.a
+    PATHS "${ARCH_PREBUILT_DIRS_RELEASE}" REQUIRED NO_DEFAULT_PATH)
+
+target_link_libraries(ll::libpng INTERFACE ${LIBPNG_LIBRARY} ll::zlib-ng)
+target_include_directories(ll::libpng SYSTEM INTERFACE ${LIBS_PREBUILT_DIR}/include/libpng16)

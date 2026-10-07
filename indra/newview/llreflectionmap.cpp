@@ -45,7 +45,8 @@ LLReflectionMap::~LLReflectionMap()
 {
     if (mOcclusionQuery)
     {
-        glDeleteQueries(1, &mOcclusionQuery);
+        gPipeline.mReflectionMapManager.recycleQuery(mOcclusionQuery);
+        mOcclusionQuery = 0;
     }
 }
 
@@ -177,7 +178,7 @@ void LLReflectionMap::autoAdjustOrigin()
         mPriority = 1;
         mOrigin.load3(mViewerObject->getPositionAgent().mV);
 
-        if (mViewerObject->getVolume() && ((LLVOVolume*)mViewerObject)->getReflectionProbeIsBox())
+        if (mViewerObject->getVolume() && ((LLVOVolume*)mViewerObject.get())->getReflectionProbeIsBox())
         {
             LLVector3 s = mViewerObject->getScale().scaledVec(LLVector3(0.5f, 0.5f, 0.5f));
             mRadius = s.magVec();
@@ -341,7 +342,7 @@ void LLReflectionMap::doOcclusion(const LLVector4a& eye)
     if (mOcclusionQuery == 0)
     { // no query was previously issued, allocate one and issue
         LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("rmdo - glGenQueries");
-        glGenQueries(1, &mOcclusionQuery);
+        mOcclusionQuery = gPipeline.mReflectionMapManager.allocateQuery();
         do_query = true;
     }
     else

@@ -4,7 +4,7 @@
  *
  * $LicenseInfo:firstyear=2001&license=viewerlgpl$
  * Second Life Viewer Source Code
- * Copyright (C) 2010, Linden Research, Inc.
+ * Copyright (C) 2026, Linden Research, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -249,11 +249,27 @@ const std::string& LLInvFVBridge::getName() const
 
 const std::string& LLInvFVBridge::getDisplayName() const
 {
-    if(mDisplayName.empty())
+    if(mSearchableName.empty())
     {
-        buildDisplayName();
+        // first request of display name, build search string and cache it for later use
+        buildSearchableName();
     }
-    return mDisplayName;
+
+    LLInventoryModel* model = getInventoryModel();
+    if (model)
+    {
+        LLViewerInventoryCategory* cat = model->getCategory(mUUID);
+        if (cat)
+        {
+            return cat->getDisplayName();
+        }
+        LLViewerInventoryItem* item = model->getItem(mUUID);
+        if (item)
+        {
+            return item->getName();
+        }
+    }
+    return LLStringUtil::null;
 }
 
 std::string LLInvFVBridge::getSearchableDescription() const
@@ -336,7 +352,7 @@ bool LLInvFVBridge::cutToClipboard()
     const LLInventoryObject* obj = gInventory.getObject(mUUID);
     if (obj && isItemMovable() && isItemRemovable())
     {
-        const LLUUID &marketplacelistings_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+        const LLUUID &marketplacelistings_id = gInventory.getMarketplaceListingsUUID();
         const bool cut_from_marketplacelistings = gInventory.isObjectDescendentOf(mUUID, marketplacelistings_id);
 
         if (cut_from_marketplacelistings && (LLMarketplaceData::instance().isInActiveFolder(mUUID) ||
@@ -829,6 +845,8 @@ void LLInvFVBridge::getClipboardEntries(bool show_asset_id,
 {
     const LLInventoryObject *obj = getInventoryObject();
     bool single_folder_root = (mRoot == NULL);
+    bool is_cof = isCOFFolder();
+    bool is_inbox = isInboxFolder();
 
     if (obj)
     {
@@ -843,7 +861,8 @@ void LLInvFVBridge::getClipboardEntries(bool show_asset_id,
             disabled_items.push_back(std::string("Copy"));
         }
 
-        if (isAgentInventory() && !single_folder_root && !isMarketplaceListingsFolder())
+        bool is_agent_inventory = isAgentInventory();
+        if (is_agent_inventory && !single_folder_root && !is_cof && !is_inbox)
         {
             items.push_back(std::string("New folder from selected"));
             items.push_back(std::string("Subfolder Separator"));
@@ -853,6 +872,19 @@ void LLInvFVBridge::getClipboardEntries(bool show_asset_id,
             if (!is_only_items_selected(ids) && !is_only_cats_selected(ids))
             {
                 disabled_items.push_back(std::string("New folder from selected"));
+            }
+        }
+
+        if (isFavorite())
+        {
+            items.push_back(std::string("Remove from Favorites"));
+        }
+        else if (is_agent_inventory && !gInventory.isObjectDescendentOf(mUUID, gInventory.findCategoryUUIDForType(LLFolderType::FT_TRASH)))
+        {
+            items.push_back(std::string("Add to Favorites"));
+            if (gInventory.getRootFolderID() == mUUID)
+            {
+                disabled_items.push_back(std::string("Add to Favorites"));
             }
         }
 
@@ -868,6 +900,7 @@ void LLInvFVBridge::getClipboardEntries(bool show_asset_id,
             if (!isItemMovable() || !canMenuCut())
             {
                 disabled_items.push_back(std::string("Cut"));
+                disabled_items.push_back(std::string("New folder from selected"));
             }
         }
         else
@@ -877,7 +910,7 @@ void LLInvFVBridge::getClipboardEntries(bool show_asset_id,
                 items.push_back(std::string("Find Links"));
             }
 
-            if (!isInboxFolder() && !single_folder_root)
+            if (!is_inbox && !single_folder_root)
             {
                 items.push_back(std::string("Rename"));
                 if (!isItemRenameable() || ((flags & FIRST_SELECTED_ITEM) == 0))
@@ -917,6 +950,7 @@ void LLInvFVBridge::getClipboardEntries(bool show_asset_id,
             if (!isItemMovable() || !canMenuCut())
             {
                 disabled_items.push_back(std::string("Cut"));
+                disabled_items.push_back(std::string("New folder from selected"));
             }
 
             if (canListOnMarketplace() && !isMarketplaceListingsFolder() && !isInboxFolder())
@@ -939,7 +973,7 @@ void LLInvFVBridge::getClipboardEntries(bool show_asset_id,
     }
 
     // Don't allow items to be pasted directly into the COF or the inbox
-    if (!isCOFFolder() && !isInboxFolder())
+    if (!is_cof && !is_inbox)
     {
         items.push_back(std::string("Paste"));
     }
@@ -1333,6 +1367,13 @@ bool LLInvFVBridge::isAgentInventory() const
     return model->isObjectDescendentOf(mUUID, gInventory.getRootFolderID());
 }
 
+bool LLInvFVBridge::isAgentInventoryRoot() const
+{
+    const LLInventoryModel* model = getInventoryModel();
+    if(!model) return false;
+    return gInventory.getRootFolderID() == mUUID;
+}
+
 bool LLInvFVBridge::isCOFFolder() const
 {
     return LLAppearanceMgr::instance().getIsInCOF(mUUID);
@@ -1353,7 +1394,7 @@ bool LLInvFVBridge::isInboxFolder() const
 
 bool LLInvFVBridge::isMarketplaceListingsFolder() const
 {
-    const LLUUID folder_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+    const LLUUID folder_id = gInventory.getMarketplaceListingsUUID();
 
     if (folder_id.isNull())
     {
@@ -1661,7 +1702,7 @@ bool LLInvFVBridge::canListOnMarketplaceNow() const
         {
             std::string error_msg;
             LLInventoryModel* model = getInventoryModel();
-            const LLUUID &marketplacelistings_id = model->findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+            const LLUUID &marketplacelistings_id = model->getMarketplaceListingsUUID();
             if (marketplacelistings_id.notNull())
             {
                 LLViewerInventoryCategory * master_folder = model->getCategory(marketplacelistings_id);
@@ -1820,7 +1861,7 @@ void LLItemBridge::performAction(LLInventoryModel* model, std::string action)
     {
         LLInventoryItem* itemp = model->getItem(mUUID);
         if (!itemp) return;
-        const LLUUID &marketplacelistings_id = model->findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+        const LLUUID& marketplacelistings_id = model->getMarketplaceListingsUUID();
         // Note: For a single item, if it's not a copy, then it's a move
         move_item_to_marketplacelistings(itemp, marketplacelistings_id, ("copy_to_marketplace_listings" == action));
     }
@@ -1835,7 +1876,14 @@ void LLItemBridge::performAction(LLInventoryModel* model, std::string action)
             {
                 LLVector3d global_pos;
                 landmark->getGlobalPos(global_pos);
-                LLLandmarkActions::getSLURLfromPosGlobal(global_pos, &copy_slurl_to_clipboard_callback_inv, true);
+                if (!global_pos.isExactlyZero())
+                {
+                    LLLandmarkActions::getSLURLfromPosGlobal(global_pos, &copy_slurl_to_clipboard_callback_inv, true);
+                }
+                else
+                {
+                    LLNotificationsUtil::add("LandmarkLocationUnknown");
+                }
             }
         }
     }
@@ -1880,6 +1928,11 @@ void LLItemBridge::doShowOnMap(LLLandmark* landmark)
 
 void copy_slurl_to_clipboard_callback_inv(const std::string& slurl)
 {
+    if (slurl.empty())
+    {
+        LLNotificationsUtil::add("LandmarkLocationUnknown");
+        return;
+    }
     gViewerWindow->getWindow()->copyTextToClipboard(utf8str_to_wstring(slurl));
     LLSD args;
     args["SLURL"] = slurl;
@@ -1998,22 +2051,22 @@ PermissionMask LLItemBridge::getPermissionMask() const
 }
 
 // virtual
-void LLItemBridge::buildDisplayName() const
+void LLItemBridge::buildSearchableName() const
 {
-    if (getItem())
+    LLViewerInventoryItem* item = getItem();
+    if (item)
     {
-        mDisplayName.assign(getItem()->getName());
+        // for items, display name matches item name
+        mSearchableName.assign(item->getName());
     }
     else
     {
-        mDisplayName.assign(LLStringUtil::null);
+        mSearchableName.assign(LLStringUtil::null);
     }
-
-    mSearchableName.assign(mDisplayName);
     mSearchableName.append(getLabelSuffix());
     LLStringUtil::toUpper(mSearchableName);
 
-    // Name set, so trigger a sort
+    // Searchable and name set, so trigger a sort
     LLInventorySort sorter = static_cast<LLFolderViewModelInventory&>(mRootViewModel).getSorter();
     if (mParent && !sorter.isByDate())
     {
@@ -2280,7 +2333,21 @@ const LLUUID& LLItemBridge::getThumbnailUUID() const
     return LLUUID::null;
 }
 
-// virtual
+bool LLItemBridge::isFavorite() const
+{
+    LLViewerInventoryItem* item = NULL;
+    LLInventoryModel* model = getInventoryModel();
+    if (model)
+    {
+        item = model->getItem(mUUID);
+    }
+    if (item)
+    {
+        return get_is_favorite(item);
+    }
+    return false;
+}
+
 bool LLItemBridge::isItemPermissive() const
 {
     if (LLViewerInventoryItem* item = getItem())
@@ -2320,39 +2387,17 @@ void LLFolderBridge::selectItem()
     }
 }
 
-void LLFolderBridge::buildDisplayName() const
+void LLFolderBridge::buildSearchableName() const
 {
-    LLFolderType::EType preferred_type = getPreferredType();
-
-    // *TODO: to be removed when database supports multi language. This is a
-    // temporary attempt to display the inventory folder in the user locale.
-    // mantipov: *NOTE: be sure this code is synchronized with LLFriendCardsManager::findChildFolderUUID
-    //      it uses the same way to find localized string
-
-    // HACK: EXT - 6028 ([HARD CODED]? Inventory > Library > "Accessories" folder)
-    // Translation of Accessories folder in Library inventory folder
-    bool accessories = false;
-    if(getName() == "Accessories")
+    LLViewerInventoryCategory* cat = gInventory.getCategory(getUUID());
+    if (cat)
     {
-        //To ensure that Accessories folder is in Library we have to check its parent folder.
-        //Due to parent LLFolderViewFloder is not set to this item yet we have to check its parent via Inventory Model
-        LLInventoryCategory* cat = gInventory.getCategory(getUUID());
-        if(cat)
-        {
-            const LLUUID& parent_folder_id = cat->getParentUUID();
-            accessories = (parent_folder_id == gInventory.getLibraryRootFolderID());
-        }
+        mSearchableName.assign(cat->getDisplayName());
     }
-
-    //"Accessories" inventory category has folder type FT_NONE. So, this folder
-    //can not be detected as protected with LLFolderType::lookupIsProtectedType
-    mDisplayName.assign(getName());
-    if (accessories || LLFolderType::lookupIsProtectedType(preferred_type))
+    else
     {
-        LLTrans::findString(mDisplayName, std::string("InvFolder ") + getName(), LLSD());
+        mSearchableName.assign(LLStringUtil::null);
     }
-
-    mSearchableName.assign(mDisplayName);
     mSearchableName.append(getLabelSuffix());
     LLStringUtil::toUpper(mSearchableName);
 
@@ -2366,6 +2411,8 @@ void LLFolderBridge::buildDisplayName() const
 
 std::string LLFolderBridge::getLabelSuffix() const
 {
+    // Folders, unlike items, have context dependent suffixes
+    // that may change as the folder is loaded
     static LLCachedControl<bool> xui_debug(gSavedSettings, "DebugShowXUINames", 0);
 
     if (mIsLoading && mTimeSinceRequestStart.getElapsedTimeF32() >= FOLDER_LOADING_MESSAGE_DELAY)
@@ -2423,6 +2470,16 @@ const LLUUID& LLFolderBridge::getThumbnailUUID() const
         return cat->getThumbnailUUID();
     }
     return LLUUID::null;
+}
+
+bool LLFolderBridge::isFavorite() const
+{
+    LLViewerInventoryCategory* cat = getCategory();
+    if (cat)
+    {
+        return cat->getIsFavorite();
+    }
+    return false;
 }
 
 void LLFolderBridge::update()
@@ -2629,7 +2686,7 @@ bool LLFolderBridge::dragCategoryIntoFolder(LLInventoryCategory* inv_cat,
 
     const LLUUID &cat_id = inv_cat->getUUID();
     const LLUUID &current_outfit_id = model->findCategoryUUIDForType(LLFolderType::FT_CURRENT_OUTFIT);
-    const LLUUID &marketplacelistings_id = model->findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+    const LLUUID& marketplacelistings_id = model->getMarketplaceListingsUUID();
     const LLUUID from_folder_uuid = inv_cat->getParentUUID();
 
     const bool move_is_into_current_outfit = (mUUID == current_outfit_id);
@@ -3267,7 +3324,7 @@ bool move_inv_category_world_to_agent(const LLUUID& object_id,
 
     if (drop && accept)
     {
-        std::shared_ptr<LLMoveInv> move_inv(new LLMoveInv);
+        std::shared_ptr<LLMoveInv> move_inv = std::make_shared<LLMoveInv>();
         move_inv->mObjectID = object_id;
         move_inv->mCategoryID = category_id;
         move_inv->mCallback = callback;
@@ -3709,7 +3766,7 @@ void LLFolderBridge::performAction(LLInventoryModel* model, std::string action)
     {
         LLInventoryCategory * cat = gInventory.getCategory(mUUID);
         if (!cat) return;
-        const LLUUID &marketplacelistings_id = model->findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+        const LLUUID& marketplacelistings_id = model->getMarketplaceListingsUUID();
         move_folder_to_marketplacelistings(cat, marketplacelistings_id, ("move_to_marketplace_listings" != action), (("copy_or_move_to_marketplace_listings" == action)));
     }
     else if ("copy_folder_uuid" == action)
@@ -3963,7 +4020,7 @@ void LLFolderBridge::pasteFromClipboard()
     LLInventoryModel* model = getInventoryModel();
     if (model && isClipboardPasteable())
     {
-        const LLUUID &marketplacelistings_id = model->findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+        const LLUUID &marketplacelistings_id = model->getMarketplaceListingsUUID();
         const bool paste_into_marketplacelistings = model->isObjectDescendentOf(mUUID, marketplacelistings_id);
 
         bool cut_from_marketplacelistings = false;
@@ -4025,7 +4082,7 @@ void LLFolderBridge::perform_pasteFromClipboard()
     if (model && isClipboardPasteable())
     {
         const LLUUID &current_outfit_id = model->findCategoryUUIDForType(LLFolderType::FT_CURRENT_OUTFIT);
-        const LLUUID &marketplacelistings_id = model->findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+        const LLUUID& marketplacelistings_id = model->getMarketplaceListingsUUID();
         const LLUUID &favorites_id = model->findCategoryUUIDForType(LLFolderType::FT_FAVORITE);
         const LLUUID &my_outifts_id = model->findCategoryUUIDForType(LLFolderType::FT_MY_OUTFITS);
         const LLUUID &lost_and_found_id = model->findCategoryUUIDForType(LLFolderType::FT_LOST_AND_FOUND);
@@ -4079,6 +4136,17 @@ void LLFolderBridge::perform_pasteFromClipboard()
         }
         else
         {
+            // Check that no folder is being pasted into itself or into one of its descendants
+            for (const LLUUID& item_id : objects)
+            {
+                LLInventoryCategory* cat = model->getCategory(item_id);
+                if (cat && (item_id == mUUID || model->isObjectDescendentOf(mUUID, item_id)))
+                {
+                    LLNotificationsUtil::add("CannotPasteFolderIntoSelf");
+                    return;
+                }
+            }
+
             // Check that all items can be moved into that folder : for the moment, only stock folder mismatch is checked
             for (std::vector<LLUUID>::const_iterator iter = objects.begin(); iter != objects.end(); ++iter)
             {
@@ -4322,7 +4390,7 @@ void LLFolderBridge::pasteLinkFromClipboard()
     if(model)
     {
         const LLUUID &current_outfit_id = model->findCategoryUUIDForType(LLFolderType::FT_CURRENT_OUTFIT);
-        const LLUUID &marketplacelistings_id = model->findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+        const LLUUID& marketplacelistings_id = model->getMarketplaceListingsUUID();
         const LLUUID &my_outifts_id = model->findCategoryUUIDForType(LLFolderType::FT_MY_OUTFITS);
 
         const bool move_is_into_current_outfit = (mUUID == current_outfit_id);
@@ -4340,6 +4408,32 @@ void LLFolderBridge::pasteLinkFromClipboard()
 
         std::vector<LLUUID> objects;
         LLClipboard::instance().pasteFromClipboard(objects);
+
+        if (objects.size() == 0)
+        {
+            LLClipboard::instance().setCutMode(false);
+            return;
+        }
+
+        LLUUID& first_id = objects[0];
+        LLInventoryItem* item = model->getItem(first_id);
+        if (item && item->getAssetUUID().isNull())
+        {
+            if (item->getActualType() == LLAssetType::AT_NOTECARD)
+            {
+                // otehrwise AIS will return 'Cannot link to items with a NULL asset_id.'
+                LLNotificationsUtil::add("CantLinkNotecard");
+                LLClipboard::instance().setCutMode(false);
+                return;
+            }
+            else if (item->getActualType() == LLAssetType::AT_MATERIAL)
+            {
+                LLNotificationsUtil::add("CantLinkMaterial");
+                LLClipboard::instance().setCutMode(false);
+                return;
+            }
+        }
+
 
         LLPointer<LLInventoryCallback> cb = NULL;
         LLInventoryPanel* panel = mInventoryPanel.get();
@@ -4396,7 +4490,7 @@ void LLFolderBridge::buildContextMenuOptions(U32 flags, menuentry_vec_t&   items
     const LLUUID &trash_id = model->findCategoryUUIDForType(LLFolderType::FT_TRASH);
     const LLUUID &lost_and_found_id = model->findCategoryUUIDForType(LLFolderType::FT_LOST_AND_FOUND);
     const LLUUID &favorites = model->findCategoryUUIDForType(LLFolderType::FT_FAVORITE);
-    const LLUUID &marketplace_listings_id = model->findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+    const LLUUID& marketplace_listings_id = model->getMarketplaceListingsUUID();
     const LLUUID &outfits_id = model->findCategoryUUIDForType(LLFolderType::FT_MY_OUTFITS);
 
     if (outfits_id == mUUID)
@@ -4420,6 +4514,7 @@ void LLFolderBridge::buildContextMenuOptions(U32 flags, menuentry_vec_t&   items
         }
 
         disabled_items.push_back(std::string("New Folder"));
+        disabled_items.push_back(std::string("upload_options"));
         disabled_items.push_back(std::string("upload_def"));
         disabled_items.push_back(std::string("create_new"));
     }
@@ -4445,6 +4540,7 @@ void LLFolderBridge::buildContextMenuOptions(U32 flags, menuentry_vec_t&   items
     {
         disabled_items.push_back(std::string("New Folder"));
         disabled_items.push_back(std::string("New Listing Folder"));
+        disabled_items.push_back(std::string("upload_options"));
         disabled_items.push_back(std::string("upload_def"));
         disabled_items.push_back(std::string("create_new"));
     }
@@ -4504,6 +4600,7 @@ void LLFolderBridge::buildContextMenuOptions(U32 flags, menuentry_vec_t&   items
                 items.push_back(std::string("Rename"));
                 items.push_back(std::string("thumbnail"));
 
+                addInventoryFavoritesMenuOptions(items);
                 addDeleteContextMenuOptions(items, disabled_items);
                 // EXT-4030: disallow deletion of currently worn outfit
                 const LLViewerInventoryItem* base_outfit_link = LLAppearanceMgr::instance().getBaseOutfitLink();
@@ -4521,6 +4618,7 @@ void LLFolderBridge::buildContextMenuOptions(U32 flags, menuentry_vec_t&   items
                 EMyOutfitsSubfolderType in_my_outfits = myoutfit_object_subfolder_type(model, mUUID, outfits_id);
                 if (in_my_outfits != MY_OUTFITS_NO)
                 {
+                    // Either an outfit or a subfolder inside MY_OUTFITS
                     if (in_my_outfits == MY_OUTFITS_SUBFOLDER)
                     {
                         // Not inside an outfit, but inside 'my outfits'
@@ -4530,6 +4628,7 @@ void LLFolderBridge::buildContextMenuOptions(U32 flags, menuentry_vec_t&   items
                     items.push_back(std::string("Rename"));
                     items.push_back(std::string("thumbnail"));
 
+                    addInventoryFavoritesMenuOptions(items);
                     addDeleteContextMenuOptions(items, disabled_items);
                 }
                 else
@@ -4546,6 +4645,7 @@ void LLFolderBridge::buildContextMenuOptions(U32 flags, menuentry_vec_t&   items
                         }
                         if (!isMarketplaceListingsFolder())
                         {
+                            items.push_back(std::string("upload_options"));
                             items.push_back(std::string("upload_def"));
                             items.push_back(std::string("create_new"));
                             items.push_back(std::string("New Script"));
@@ -4577,6 +4677,8 @@ void LLFolderBridge::buildContextMenuOptions(U32 flags, menuentry_vec_t&   items
         if (model->findCategoryUUIDForType(LLFolderType::FT_CURRENT_OUTFIT) == mUUID)
         {
             items.push_back(std::string("Copy outfit list to clipboard"));
+            addInventoryFavoritesMenuOptions(items);
+
             addOpenFolderMenuOptions(flags, items);
         }
 
@@ -4832,6 +4934,18 @@ void LLFolderBridge::addOpenFolderMenuOptions(U32 flags, menuentry_vec_t& items)
         {
             items.push_back(std::string("open_in_current_window"));
         }
+    }
+}
+
+void LLFolderBridge::addInventoryFavoritesMenuOptions(menuentry_vec_t& items)
+{
+    if (isFavorite())
+    {
+        items.push_back(std::string("Remove from Favorites"));
+    }
+    else
+    {
+        items.push_back(std::string("Add to Favorites"));
     }
 }
 
@@ -5613,7 +5727,7 @@ bool LLFolderBridge::dragItemIntoFolder(LLInventoryItem* inv_item,
     const LLUUID &current_outfit_id = model->findCategoryUUIDForType(LLFolderType::FT_CURRENT_OUTFIT);
     const LLUUID &favorites_id = model->findCategoryUUIDForType(LLFolderType::FT_FAVORITE);
     const LLUUID &landmarks_id = model->findCategoryUUIDForType(LLFolderType::FT_LANDMARK);
-    const LLUUID &marketplacelistings_id = model->findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+    const LLUUID& marketplacelistings_id = model->getMarketplaceListingsUUID();
     const LLUUID &my_outifts_id = model->findCategoryUUIDForType(LLFolderType::FT_MY_OUTFITS);
     const LLUUID from_folder_uuid = inv_item->getParentUUID();
 
@@ -5894,7 +6008,7 @@ bool LLFolderBridge::dragItemIntoFolder(LLInventoryItem* inv_item,
         if (accept && drop)
         {
             LLUUID item_id = inv_item->getUUID();
-            std::shared_ptr<LLMoveInv> move_inv (new LLMoveInv());
+            std::shared_ptr<LLMoveInv> move_inv = std::make_shared<LLMoveInv>();
             move_inv->mObjectID = inv_item->getParentUUID();
             two_uuids_t item_pair(mUUID, item_id);
             move_inv->mMoveList.push_back(item_pair);
@@ -6469,18 +6583,29 @@ void LLCallingCardBridge::refreshFolderViewItem()
 
 void LLCallingCardBridge::checkSearchBySuffixChanges()
 {
-    if (!mDisplayName.empty())
+    if (!mSearchableName.empty())
     {
-        // changes in mDisplayName are processed by rename function and here it will be always same
+        LLViewerInventoryItem* item = getItem();
+        if (!item)
+        {
+            // checkSearchBySuffixChanges is only used by friend list
+            // so if item is not found, we removed the calling card or
+            // are no longer friends.
+            mSearchableName.clear();
+            return;
+        }
+
+        // changes in display name are processed by rename function and here it will be always same
         // suffixes are also of fixed length, and we are processing change of one at a time,
         // so it should be safe to use length (note: mSearchableName is capitalized)
-        auto old_length = mSearchableName.length();
-        auto new_length = mDisplayName.length() + getLabelSuffix().length();
+        size_t old_length = mSearchableName.length();
+        const std::string& display_name = item->getName();
+        size_t new_length = display_name.length() + getLabelSuffix().length();
         if (old_length == new_length)
         {
             return;
         }
-        mSearchableName.assign(mDisplayName);
+        mSearchableName.assign(display_name);
         mSearchableName.append(getLabelSuffix());
         LLStringUtil::toUpper(mSearchableName);
         if (new_length<old_length)
@@ -7089,12 +7214,13 @@ void LLObjectBridge::performAction(LLInventoryModel* model, std::string action)
         item = (LLViewerInventoryItem*)gInventory.getItem(object_id);
         if(item && gInventory.isObjectDescendentOf(object_id, gInventory.getRootFolderID()))
         {
-            rez_attachment(item, NULL, true); // Replace if "Wear"ing.
+            static LLCachedControl<U32> add_attachment_behavior(gSavedSettings, "InventoryAddAttachmentBehavior", 0);
+            rez_attachment(item, NULL, ("attach" == action) ? (add_attachment_behavior() == 1) : true); // Replace if "Wear"ing.
         }
         else if(item && item->isFinished())
         {
             // must be in library. copy it to our inventory and put it on.
-            LLPointer<LLInventoryCallback> cb = new LLBoostFuncInventoryCallback(boost::bind(rez_attachment_cb, _1, (LLViewerJointAttachment*)0));
+            LLPointer<LLInventoryCallback> cb = new LLBoostFuncInventoryCallback(boost::bind(rez_attachment_cb, _1, (LLViewerJointAttachment*)0, true));
             copy_inventory_item(
                 gAgent.getID(),
                 item->getPermissions().getOwner(),
@@ -7357,7 +7483,7 @@ bool LLObjectBridge::renameItem(const std::string& new_name)
         new_item->updateServer(false);
         model->updateItem(new_item);
         model->notifyObservers();
-        buildDisplayName();
+        buildSearchableName();
 
         if (isAgentAvatarValid())
         {
@@ -7379,6 +7505,15 @@ bool LLObjectBridge::renameItem(const std::string& new_name)
 // +=================================================+
 // |        LLLSLTextBridge                          |
 // +=================================================+
+
+LLUIImagePtr LLLSLTextBridge::getIcon() const
+{
+    // Pass the item's flags so the script subtype (e.g. SST_LUA) is honored
+    // and the correct icon (Inv_Script vs Inv_Script_Luau) is selected.
+    LLInventoryItem* item = getItem();
+    U32 misc_flag = item ? item->getFlags() : 0;
+    return LLInventoryIcon::getIcon(LLAssetType::AT_LSL_TEXT, LLInventoryType::IT_LSL, misc_flag, false);
+}
 
 void LLLSLTextBridge::openItem()
 {
@@ -7735,6 +7870,15 @@ void LLLinkItemBridge::buildContextMenu(LLMenuGL& menu, U32 flags)
     {
         items.push_back(std::string("Properties"));
         addDeleteContextMenuOptions(items, disabled_items);
+
+        if (isFavorite())
+        {
+            items.push_back(std::string("Remove from Favorites"));
+        }
+        else if (isAgentInventory())
+        {
+            items.push_back(std::string("Add to Favorites"));
+        }
     }
     addLinkReplaceMenuOption(items, disabled_items);
     hide_context_entries(menu, items, disabled_items);
@@ -7961,6 +8105,15 @@ void LLLinkFolderBridge::buildContextMenu(LLMenuGL& menu, U32 flags)
     {
         items.push_back(std::string("Find Original"));
         addDeleteContextMenuOptions(items, disabled_items);
+
+        if (isFavorite())
+        {
+            items.push_back(std::string("Remove from Favorites"));
+        }
+        else if (isAgentInventory())
+        {
+            items.push_back(std::string("Add to Favorites"));
+        }
     }
     hide_context_entries(menu, items, disabled_items);
 }
@@ -8219,7 +8372,8 @@ void LLObjectBridgeAction::attachOrDetach()
     }
     else
     {
-        LLAppearanceMgr::instance().wearItemOnAvatar(mUUID, true, false); // Don't replace if adding.
+        static LLCachedControl<U32> add_attachment_behavior(gSavedSettings, "InventoryAddAttachmentBehavior", 0);
+        LLAppearanceMgr::instance().wearItemOnAvatar(mUUID, true, add_attachment_behavior() == 1); // Don't replace if adding.
     }
 }
 
@@ -8410,6 +8564,7 @@ void LLRecentItemsFolderBridge::buildContextMenu(LLMenuGL& menu, U32 flags)
         buildContextMenuOptions(flags, items, disabled_items);
 
     items.erase(std::remove(items.begin(), items.end(), std::string("New Folder")), items.end());
+    items.erase(std::remove(items.begin(), items.end(), std::string("New folder from selected")), items.end());
 
     hide_context_entries(menu, items, disabled_items);
 }
@@ -8444,6 +8599,51 @@ LLInvFVBridge* LLRecentInventoryBridgeBuilder::createBridge(
     return new_listener;
 }
 
+/************************************************************************/
+/* Favorites Inventory Panel related classes                               */
+/************************************************************************/
+void LLFavoritesFolderBridge::buildContextMenu(LLMenuGL& menu, U32 flags)
+{
+    // todo: consider things that should be disabled
+    menuentry_vec_t disabled_items, items;
+    buildContextMenuOptions(flags, items, disabled_items);
+
+    items.erase(std::remove(items.begin(), items.end(), std::string("New Folder")), items.end());
+    items.erase(std::remove(items.begin(), items.end(), std::string("New folder from selected")), items.end());
+
+    hide_context_entries(menu, items, disabled_items);
+}
+
+LLInvFVBridge* LLFavoritesInventoryBridgeBuilder::createBridge(
+    LLAssetType::EType asset_type,
+    LLAssetType::EType actual_asset_type,
+    LLInventoryType::EType inv_type,
+    LLInventoryPanel* inventory,
+    LLFolderViewModelInventory* view_model,
+    LLFolderView* root,
+    const LLUUID& uuid,
+    U32 flags /*= 0x00*/) const
+{
+    LLInvFVBridge* new_listener = NULL;
+    if (asset_type == LLAssetType::AT_CATEGORY
+        && actual_asset_type != LLAssetType::AT_LINK_FOLDER)
+    {
+        new_listener = new LLFavoritesFolderBridge(inv_type, inventory, root, uuid);
+    }
+    else
+    {
+        new_listener = LLInventoryFolderViewModelBuilder::createBridge(asset_type,
+            actual_asset_type,
+            inv_type,
+            inventory,
+            view_model,
+            root,
+            uuid,
+            flags);
+    }
+    return new_listener;
+}
+
 LLFolderViewGroupedItemBridge::LLFolderViewGroupedItemBridge()
 {
 }
@@ -8454,7 +8654,7 @@ void LLFolderViewGroupedItemBridge::groupFilterContextMenu(folder_view_item_dequ
     menuentry_vec_t disabled_items;
     if (get_selection_item_uuids(selected_items, ids))
     {
-        if (!LLAppearanceMgr::instance().canAddWearables(ids) && canWearSelected(ids))
+        if (!LLAppearanceMgr::instance().canAddWearables(ids, false) && canWearSelected(ids))
         {
             disabled_items.push_back(std::string("Wearable And Object Wear"));
             disabled_items.push_back(std::string("Wearable Add"));

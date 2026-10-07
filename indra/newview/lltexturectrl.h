@@ -50,8 +50,8 @@ class LLViewerFetchedTexture;
 class LLFetchedGLTFMaterial;
 
 // used for setting drag & drop callbacks.
-typedef boost::function<bool (LLUICtrl*, LLInventoryItem*)> drag_n_drop_callback;
-typedef boost::function<void (LLInventoryItem*)> texture_selected_callback;
+typedef std::function<bool (LLUICtrl*, LLInventoryItem*)> drag_n_drop_callback;
+typedef std::function<void (LLInventoryItem*)> texture_selected_callback;
 
 // Helper functions for UI that work with picker
 bool get_is_predefined_texture(LLUUID asset_id);
@@ -167,6 +167,8 @@ public:
     // LLUICtrl interface
     void clear() override;
 
+    void setTentative(bool b) override;
+
     // Takes a UUID, wraps get/setImageAssetID
     void setValue(const LLSD& value) override;
     LLSD getValue() const override;
@@ -181,7 +183,7 @@ public:
     void            setAllowNoTexture( bool b )                 { mAllowNoTexture = b; }
     bool            getAllowNoTexture() const                   { return mAllowNoTexture; }
 
-    void            setAllowLocalTexture(bool b)                    { mAllowLocalTexture = b; }
+    void            setAllowLocalTexture(bool b);
     bool            getAllowLocalTexture() const                    { return mAllowLocalTexture; }
 
     const LLUUID&   getImageItemID() { return mImageItemID; }
@@ -297,10 +299,10 @@ private:
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // LLFloaterTexturePicker
-typedef boost::function<void(LLTextureCtrl::ETexturePickOp op, LLPickerSource source, const LLUUID& asset_id, const LLUUID& inventory_id, const LLUUID& tracking_id)> floater_commit_callback;
-typedef boost::function<void()> floater_close_callback;
-typedef boost::function<void(const LLUUID& asset_id)> set_image_asset_id_callback;
-typedef boost::function<void(LLPointer<LLViewerTexture> texture)> set_on_update_image_stats_callback;
+typedef std::function<void(LLTextureCtrl::ETexturePickOp op, LLPickerSource source, const LLUUID& asset_id, const LLUUID& inventory_id, const LLUUID& tracking_id)> floater_commit_callback;
+typedef std::function<void()> floater_close_callback;
+typedef std::function<void(const LLUUID& asset_id)> set_image_asset_id_callback;
+typedef std::function<void(LLPointer<LLViewerTexture> texture)> set_on_update_image_stats_callback;
 
 class LLFloaterTexturePicker : public LLFloater
 {
@@ -338,7 +340,7 @@ public:
     void setImageID(const LLUUID& image_asset_id, bool set_selection = true);
     bool updateImageStats(); // true if within limits
     const LLUUID&   getAssetID() { return mImageAssetID; }
-    const LLUUID&   findItemID(const LLUUID& asset_id, bool copyable_only, bool ignore_library = false);
+    const LLUUID&   findItemID(const LLUUID& asset_id, bool copyable_only, bool ignore_library = false) const;
     void            setCanApplyImmediately(bool b);
 
     void            setActive(bool active);
@@ -372,7 +374,7 @@ public:
     static void     onBtnNone(void* userdata);
     void            onSelectionChange(const std::deque<LLFolderViewItem*> &items, bool user_action);
     static void     onApplyImmediateCheck(LLUICtrl* ctrl, void* userdata);
-    void            onTextureSelect(const LLTextureEntry& te);
+    void            onPipetteSelect(LLPointer<LLViewerObject>& object, S32 te_index);
 
     static void     onModeSelect(LLUICtrl* ctrl, void *userdata);
     static void     onBtnAdd(void* userdata);
@@ -395,6 +397,7 @@ protected:
     void refreshLocalList();
     void refreshInventoryFilter();
     void setImageIDFromItem(const LLInventoryItem* itemp, bool set_selection = true);
+    LLViewerInventoryItem* findInvItem(const LLUUID& asset_id, bool copyable_only, bool ignore_library = false) const;
 
     LLPointer<LLViewerTexture> mTexturep;
     LLPointer<LLFetchedGLTFMaterial> mGLTFMaterial;
@@ -405,7 +408,6 @@ protected:
     LLUIImagePtr        mFallbackImage; // What to show if currently selected texture is null.
     LLUUID              mDefaultImageAssetID;
     LLUUID              mBlankImageAssetID;
-    bool                mTentative;
     bool                mAllowNoTexture;
     LLUUID              mSpecialCurrentImageAssetID;  // Used when the asset id has no corresponding texture in the user's inventory.
     LLUUID              mOriginalImageAssetID;
@@ -455,7 +457,10 @@ private:
     set_image_asset_id_callback mSetImageAssetIDCallback;
     set_on_update_image_stats_callback mOnUpdateImageStatsCallback;
 
+    boost::signals2::scoped_connection  mPipetteConnection;
+
     bool mBakeTextureEnabled;
+    bool mLocalTextureEnabled;
 
     static S32 sLastPickerMode;
 };

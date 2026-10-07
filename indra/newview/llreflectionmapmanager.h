@@ -106,9 +106,12 @@ public:
 
     // release any GL state
     void cleanup();
+    void cleanupQueryPool();
 
     // maintain reflection probes
     void update();
+
+    void refreshSettings();
 
     // add a probe for the given spatial group
     LLReflectionMap* addProbe(LLSpatialGroup* group = nullptr);
@@ -162,6 +165,10 @@ public:
     U32 probeCount();
     U32 probeMemory();
 
+    // glDeleteQueries is expensive, so we maintain a pool of queries
+    GLuint allocateQuery();
+    void recycleQuery(GLuint query);
+
 private:
     friend class LLPipeline;
     friend class LLHeroProbeManager;
@@ -187,6 +194,8 @@ private:
 
     // bind UBO used for rendering
     void setUniforms();
+
+    std::deque<GLuint>                                    mQueryPool;
 
     // render target for cube snapshots
     // used to generate mipmaps without doing a copy-to-texture
@@ -247,6 +256,12 @@ private:
     U32 mReflectionProbeCount;
 
     U32 mDynamicProbeCount;
+
+    // cached settings from gSavedSettings
+    S32 mRenderReflectionProbeDetail = -1;
+    S32 mRenderReflectionProbeLevel = 3;
+    U32 mRenderReflectionProbeCount = 256U;
+    S32 mRenderReflectionProbeDynamicAllocation = -1;
 
     // resolution of reflection probes
     U32 mProbeResolution = 128;

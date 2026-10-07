@@ -61,6 +61,7 @@
 #include "lltooltip.h"
 #include "llmenugl.h"
 #include "llchatmentionhelper.h"
+#include "llgestureautocompletehelper.h"
 
 #include <queue>
 #include "llcombobox.h"
@@ -274,7 +275,9 @@ LLTextEditor::LLTextEditor(const LLTextEditor::Params& p) :
     mShowChatMentionPicker(false),
     mEnableTooltipPaste(p.enable_tooltip_paste),
     mPassDelete(false),
-    mKeepSelectionOnReturn(false)
+    mKeepSelectionOnReturn(false),
+    mSelectAllOnFocusReceived(false),
+    mSelectedOnFocusReceived(false)
 {
     mSourceID.generate();
 
@@ -398,6 +401,7 @@ void LLTextEditor::selectNext(const std::string& search_text_in, bool case_insen
     setCursorPos(loc);
 
     mIsSelecting = true;
+    mSelectedOnFocusReceived = false;
     mSelectionEnd = mCursorPos;
     mSelectionStart = llmin((S32)getLength(), (S32)(mCursorPos + search_text.size()));
 }
@@ -578,7 +582,7 @@ S32 LLTextEditor::indentLine( S32 pos, S32 spaces )
             LLWString wtext = getWText();
             if (wtext[pos] == ' ')
             {
-                delta_spaces += remove( pos, 1, false );
+                delta_spaces -= remove( pos, 1, false );
             }
         }
     }
@@ -677,6 +681,13 @@ bool LLTextEditor::canSelectAll() const
     return true;
 }
 
+//virtual
+void LLTextEditor::deselect()
+{
+    LLTextBase::deselect();
+    mSelectedOnFocusReceived = false;
+}
+
 // virtual
 void LLTextEditor::selectAll()
 {
@@ -692,6 +703,11 @@ void LLTextEditor::selectByCursorPosition(S32 prev_cursor_pos, S32 next_cursor_p
     startSelection();
     setCursorPos(next_cursor_pos);
     endSelection();
+}
+
+void LLTextEditor::setSelectAllOnFocusReceived(bool b)
+{
+    mSelectAllOnFocusReceived = b;
 }
 
 void LLTextEditor::insertEmoji(llwchar emoji)
@@ -795,8 +811,16 @@ bool LLTextEditor::handleMouseDown(S32 x, S32 y, MASK mask)
     // Delay cursor flashing
     resetCursorBlink();
 
+    mSelectedOnFocusReceived = false;
     if (handled && !gFocusMgr.getMouseCapture())
     {
+        if (!mask && mSelectAllOnFocusReceived)
+        {
+            mIsSelecting = false;
+            mSelectionStart = getLength();
+            mSelectionEnd = 0;
+            mSelectedOnFocusReceived = true;
+        }
         gFocusMgr.setMouseCapture( this );
     }
     return handled;
@@ -1219,7 +1243,7 @@ void LLTextEditor::addChar(llwchar wc)
     tryToShowEmojiHelper();
     tryToShowMentionHelper();
 
-    if (!mReadOnly && mAutoreplaceCallback != NULL)
+    if (!mReadOnly && mAutoreplaceCallback != nullptr)
     {
         // autoreplace the text, if necessary
         S32 replacement_start;
@@ -1669,27 +1693,24 @@ void LLTextEditor::pasteTextWithLinebreaks(LLWString & clean_string)
     std::basic_string<llwchar>::size_type start = 0;
     std::basic_string<llwchar>::size_type pos = clean_string.find('\n',start);
 
-    while((pos != -1) && (pos != clean_string.length() -1))
+    while (pos != std::basic_string<llwchar>::npos)
     {
-        if(pos!=start)
+        if (pos != start)
         {
             std::basic_string<llwchar> str = std::basic_string<llwchar>(clean_string,start,pos-start);
             setCursorPos(mCursorPos + insert(mCursorPos, str, true, LLTextSegmentPtr()));
         }
-        addLineBreakChar(true);         // Add a line break and group with the next addition.
+        const bool trailing_linebreak = (pos == clean_string.length() - 1);
+        addLineBreakChar(!trailing_linebreak);
 
         start = pos+1;
         pos = clean_string.find('\n',start);
     }
 
-    if (pos != start)
+    if (start < clean_string.length())
     {
         std::basic_string<llwchar> str = std::basic_string<llwchar>(clean_string,start,clean_string.length()-start);
         setCursorPos(mCursorPos + insert(mCursorPos, str, false, LLTextSegmentPtr()));
-    }
-    else
-    {
-        addLineBreakChar(false);        // Add a line break and end the grouping.
     }
 }
 
@@ -1927,7 +1948,8 @@ bool LLTextEditor::handleKeyHere(KEY key, MASK mask )
     // not handled and let the parent take care of field movement.
     if (KEY_TAB == key && mTabsToNextField)
     {
-        return mShowChatMentionPicker && LLChatMentionHelper::instance().handleKey(this, key, mask);
+        return (mShowChatMentionPicker && LLChatMentionHelper::instance().handleKey(this, key, mask))
+            || LLGestureAutocompleteHelper::instance().handleKey(this, key, mask);
     }
 
     if (mReadOnly && mScroller)
@@ -1941,7 +1963,8 @@ bool LLTextEditor::handleKeyHere(KEY key, MASK mask )
         if (!mReadOnly)
         {
             if ((mShowEmojiHelper && LLEmojiHelper::instance().handleKey(this, key, mask)) ||
-                (mShowChatMentionPicker && LLChatMentionHelper::instance().handleKey(this, key, mask)))
+                (mShowChatMentionPicker && LLChatMentionHelper::instance().handleKey(this, key, mask)) ||
+                LLGestureAutocompleteHelper::instance().handleKey(this, key, mask))
             {
                 return true;
             }
@@ -2198,6 +2221,11 @@ void LLTextEditor::focusLostHelper()
     if( gEditMenuHandler == this )
     {
         gEditMenuHandler = NULL;
+    }
+
+    if (mSelectedOnFocusReceived)
+    {
+        deselect();
     }
 
     if (mCommitOnFocusLost)

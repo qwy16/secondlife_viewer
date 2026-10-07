@@ -296,18 +296,21 @@ static void delete_buffers(S32 count, GLuint* buffers)
     LL_PROFILE_ZONE_SCOPED_CATEGORY_VERTEX;
     // wait a few frames before actually deleting the buffers to avoid
     // synchronization issues with the GPU
-    static std::vector<GLuint> sFreeList[4];
+    constexpr U32 BUCKET_COUNT = 4;
+    static std::vector<GLuint> sFreeList[BUCKET_COUNT];
 
     if (gGLManager.mInited)
     {
-        U32 idx = LLImageGL::sFrameCount % 4;
+        // Move current frame to free list
+        U32 idx = LLImageGL::sFrameCount % BUCKET_COUNT;
 
         for (S32 i = 0; i < count; ++i)
         {
             sFreeList[idx].push_back(buffers[i]);
         }
 
-        idx = (LLImageGL::sFrameCount + 3) % 4;
+        // Clear frame -3 (equals +1), this idx will be written over on the next call
+        idx = (LLImageGL::sFrameCount + 1) % BUCKET_COUNT;
 
         if (!sFreeList[idx].empty())
         {
@@ -787,12 +790,6 @@ void LLVertexBuffer::drawElements(U32 mode, const LLVector4a* pos, const LLVecto
 
     gGL.syncMatrices();
 
-    U32 mask = LLVertexBuffer::MAP_VERTEX;
-    if (tc)
-    {
-        mask = mask | LLVertexBuffer::MAP_TEXCOORD0;
-    }
-
     unbind();
 
     gGL.begin(mode);
@@ -885,7 +882,7 @@ bool LLVertexBuffer::validateRange(U32 start, U32 end, U32 count, U32 indices_of
     return true;
 }
 
-#ifdef LL_PROFILER_ENABLE_RENDER_DOC
+#if LL_PROFILER_ENABLE_RENDER_DOC
 void LLVertexBuffer::setLabel(const char* label) {
     LL_LABEL_OBJECT_GL(GL_BUFFER, mGLBuffer, strlen(label), label);
 }
@@ -945,12 +942,14 @@ void LLVertexBuffer::initClass(LLWindow* window)
 {
     llassert(sVBOPool == nullptr);
 
+#if LL_DARWIN || LL_ARM64
     if (gGLManager.mIsApple)
     {
         LL_INFOS() << "VBO Pooling Disabled" << LL_ENDL;
         sVBOPool = new LLAppleVBOPool();
     }
     else
+#endif
     {
         LL_INFOS() << "VBO Pooling Enabled" << LL_ENDL;
         sVBOPool = new LLDefaultVBOPool();
@@ -1288,7 +1287,12 @@ U8* LLVertexBuffer::mapVertexBuffer(LLVertexBuffer::AttributeType type, U32 inde
         count = mNumVerts - index;
     }
 
+#if LL_DARWIN || LL_ARM64
+    // Region tracking not needed on apple silicon - it recreates entire buffer
+    // While mIsApple can be encountered under windows, this is a
+    // macOS OpenGL behavior workaround. LL_ARM64 check might be not needed
     if (!gGLManager.mIsApple)
+#endif
     {
         U32 start = mOffsets[type] + sTypeSize[type] * index;
         U32 end = start + sTypeSize[type] * count-1;
@@ -1325,7 +1329,9 @@ U8* LLVertexBuffer::mapIndexBuffer(U32 index, S32 count)
         count = mNumIndices-index;
     }
 
+#if LL_DARWIN || LL_ARM64
     if (!gGLManager.mIsApple)
+#endif
     {
         U32 start = sizeof(U16) * index;
         U32 end = start + sizeof(U16) * count-1;
@@ -1360,6 +1366,7 @@ U8* LLVertexBuffer::mapIndexBuffer(U32 index, S32 count)
 //  dst -- mMappedData or mMappedIndexData
 void LLVertexBuffer::flush_vbo(GLenum target, U32 start, U32 end, void* data, U8* dst)
 {
+#if LL_DARWIN || LL_ARM64
     if (gGLManager.mIsApple)
     {
         // on OS X, flush_vbo doesn't actually write to the GL buffer, so be sure to call
@@ -1371,6 +1378,7 @@ void LLVertexBuffer::flush_vbo(GLenum target, U32 start, U32 end, void* data, U8
         memcpy(dst+start, data, end-start+1);
     }
     else
+#endif
     {
         llassert(target == GL_ARRAY_BUFFER ? sGLRenderBuffer == mGLBuffer : sGLRenderIndices == mGLIndices);
 
@@ -1426,6 +1434,7 @@ void LLVertexBuffer::_unmapBuffer()
         }
     };
 
+#if LL_DARWIN || LL_ARM64
     if (gGLManager.mIsApple)
     {
         STOP_GLERROR;
@@ -1468,6 +1477,7 @@ void LLVertexBuffer::_unmapBuffer()
         STOP_GLERROR;
     }
     else
+#endif // LL_DARWIN || LL_ARM64
     {
         if (!mMappedVertexRegions.empty())
         {

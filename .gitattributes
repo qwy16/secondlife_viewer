@@ -1,8 +1,5 @@
 * text eol=lf
 
-# VSTool (normalization disabled)
-indra/tools/vstool/* -text
-
 # Images
 *.bmp binary
 *.BMP binary
@@ -26,6 +23,10 @@ indra/tools/vstool/* -text
 # Executables
 *.dll binary
 *.exe binary
+
+# Test Resources
+*.binary binary
+*.output binary
 
 # Files with Windows line endings
 VivoxAUP.txt text eol=crlf

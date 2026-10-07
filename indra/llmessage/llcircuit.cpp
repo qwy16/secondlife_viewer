@@ -71,8 +71,8 @@ LLCircuitData::LLCircuitData(const LLHost &host, TPACKETID in_id,
     mPacketsOutID(0),
     mPacketsInID(in_id),
     mHighestPacketID(in_id),
-    mTimeoutCallback(NULL),
-    mTimeoutUserData(NULL),
+    mTimeoutCallback(nullptr),
+    mTimeoutUserData(nullptr),
     mTrusted(false),
     mbAllowTimeout(true),
     mbAlive(true),
@@ -346,8 +346,7 @@ S32 LLCircuitData::resendUnackedPackets(const F64Seconds now)
 
             packetp->mBuffer[0] |= LL_RESENT_FLAG;  // tag packet id as being a resend
 
-            gMessageSystem->mPacketRing.sendPacket(packetp->mSocket,
-                                               (char *)packetp->mBuffer, packetp->mBufferLength,
+            gMessageSystem->sendPacketToSocket((char *)packetp->mBuffer, packetp->mBufferLength,
                                                packetp->mHost);
 
             mThrottles.throttleOverflow(TC_RESEND, packetp->mBufferLength * 8.f);
@@ -973,7 +972,7 @@ bool LLCircuitData::updateWatchDogTimers(LLMessageSystem *msgsys)
         {
             // let's call this one a loss!
             mPacketsLost++;
-            gMessageSystem->mDroppedPackets++;
+            gMessageSystem->mLostPackets++;
             if(gMessageSystem->mVerboseLog)
             {
                 std::ostringstream str;

@@ -202,8 +202,18 @@ void inventory_offer_handler(LLOfferInfo* info)
     auto indx = msg.find(" ( http://slurl.com/secondlife/");
     if (indx == std::string::npos)
     {
-        // try to find new slurl host
+        // https
+        indx = msg.find(" ( https://slurl.com/secondlife/");
+    }
+    if (indx == std::string::npos)
+    {
+        // try to find new slurl http host
         indx = msg.find(" ( http://maps.secondlife.com/secondlife/");
+    }
+    if (indx == std::string::npos)
+    {
+        // try to find new slurl https host
+        indx = msg.find(" ( https://maps.secondlife.com/secondlife/");
     }
     if (indx >= 0)
     {
@@ -1475,6 +1485,7 @@ void LLIMProcessing::processNewMessage(LLUUID from_id,
                         LLNotification::Params params("OfferFriendship");
                         params.substitutions = args;
                         params.payload = payload;
+                        params.offer_from_agent = true;
                         LLPostponedNotification::add<LLPostponedOfferNotification>(params, from_id, false);
                     }
                 }
@@ -1520,10 +1531,10 @@ void LLIMProcessing::requestOfflineMessages()
     if (!requested
         && gMessageSystem
         && !gDisconnected
-        && LLMuteList::getInstance()->isLoaded()
         && isAgentAvatarValid()
         && gAgent.getRegion()
-        && gAgent.getRegion()->capabilitiesReceived())
+        && gAgent.getRegion()->capabilitiesReceived()
+        && LLMuteList::getInstance()->updateLoadState())
     {
         std::string cap_url = gAgent.getRegionCapability("ReadOfflineMsgs");
 
@@ -1551,8 +1562,8 @@ void LLIMProcessing::requestOfflineMessagesCoro(std::string url)
 {
     LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
     LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t
-        httpAdapter(new LLCoreHttpUtil::HttpCoroutineAdapter("requestOfflineMessagesCoro", httpPolicy));
-    LLCore::HttpRequest::ptr_t httpRequest(new LLCore::HttpRequest);
+        httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>("requestOfflineMessagesCoro", httpPolicy);
+    LLCore::HttpRequest::ptr_t httpRequest = std::make_shared<LLCore::HttpRequest>();
 
     LLSD result = httpAdapter->getAndSuspend(httpRequest, url);
 
@@ -1571,7 +1582,8 @@ void LLIMProcessing::requestOfflineMessagesCoro(std::string url)
 
     if (!contents.size())
     {
-        LL_WARNS("Messaging") << "No contents received for offline messages via capability " << url << LL_ENDL;
+        // Received no offline messages on login.
+        LL_INFOS("Messaging") << "No contents received for offline messages via capability " << url << LL_ENDL;
         return;
     }
 

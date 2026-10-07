@@ -201,7 +201,7 @@ void LLFloaterEditEnvironmentBase::onAssetLoaded(LLUUID asset_id, LLSettingsBase
         LLSD args;
         args["NAME"] = (mInventoryItem) ? mInventoryItem->getName() : asset_id.asString();
         LLNotificationsUtil::add("FailedToFindSettings", args);
-        closeFloater();
+        closeFloater(LLApp::isQuitting());
         return;
     }
 
@@ -262,7 +262,7 @@ void LLFloaterEditEnvironmentBase::onSaveAsCommit(const LLSD& notification, cons
         }
         else if (mInventoryItem)
         {
-            const LLUUID &marketplacelistings_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+            const LLUUID& marketplacelistings_id = gInventory.getMarketplaceListingsUUID();
             LLUUID parent_id = mInventoryItem->getParentUUID();
             if (marketplacelistings_id == parent_id || gInventory.isObjectDescendentOf(mInventoryItem->getUUID(), gInventory.getLibraryRootFolderID()))
             {

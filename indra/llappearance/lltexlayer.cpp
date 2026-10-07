@@ -435,6 +435,31 @@ const std::string LLTexLayerSet::getBodyRegionName() const
     return mInfo->mBodyRegion;
 }
 
+// virtual
+void LLTexLayerSet::asLLSD(LLSD& sd) const
+{
+    sd["visible"] = LLSD::Boolean(isVisible());
+    LLSD layer_list_sd;
+    layer_list_t::const_iterator layer_iter = mLayerList.begin();
+    layer_list_t::const_iterator layer_end  = mLayerList.end();
+    for(; layer_iter != layer_end; ++layer_iter)
+    {
+        LLSD layer_sd;
+        LLTexLayerInterface* layer = (*layer_iter);
+        if (layer)
+        {
+            layer->asLLSD(layer_sd);
+        }
+        layer_list_sd.append(layer_sd);
+    }
+    LLSD mask_list_sd;
+    LLSD info_sd;
+    sd["layers"] = layer_list_sd;
+    sd["masks"] = mask_list_sd;
+    sd["info"] = info_sd;
+}
+
+
 void LLTexLayerSet::destroyComposite()
 {
     if( mComposite )
@@ -1293,7 +1318,7 @@ void LLTexLayer::renderMorphMasks(S32 x, S32 y, S32 width, S32 height, const LLC
 {
     if (!force_render && !hasMorph())
     {
-        LL_DEBUGS() << "skipping renderMorphMasks for " << getUUID() << LL_ENDL;
+        LL_DEBUGS("Morph") << "skipping renderMorphMasks for " << getUUID() << LL_ENDL;
         return;
     }
     LL_PROFILE_ZONE_SCOPED;
@@ -1325,7 +1350,7 @@ void LLTexLayer::renderMorphMasks(S32 x, S32 y, S32 width, S32 height, const LLC
         success &= param->render( x, y, width, height );
         if (!success && !force_render)
         {
-            LL_DEBUGS() << "Failed to render param " << param->getID() << " ; skipping morph mask." << LL_ENDL;
+            LL_DEBUGS("Morph") << "Failed to render param " << param->getID() << " ; skipping morph mask." << LL_ENDL;
             return;
         }
     }
@@ -1365,7 +1390,7 @@ void LLTexLayer::renderMorphMasks(S32 x, S32 y, S32 width, S32 height, const LLC
             }
             else
             {
-                LL_WARNS() << "Skipping rendering of " << getInfo()->mStaticImageFileName
+                LL_WARNS("Morph") << "Skipping rendering of " << getInfo()->mStaticImageFileName
                         << "; expected 1 or 4 components." << LL_ENDL;
             }
         }
@@ -1404,8 +1429,17 @@ void LLTexLayer::renderMorphMasks(S32 x, S32 y, S32 width, S32 height, const LLC
                 // We can get bad morph masks during login, on minimize, and occasional gl errors.
                 // We should only be doing this when we believe something has changed with respect to the user's appearance.
         {
-                       LL_DEBUGS("Avatar") << "gl alpha cache of morph mask not found, doing readback: " << getName() << LL_ENDL;
-                        // clear out a slot if we have filled our cache
+            LL_DEBUGS("Morph") << "gl alpha cache of morph mask not found, doing readback: " << getName() << LL_ENDL;
+
+            // Replace the cached mask without leaking its old allocation.
+            alpha_cache_t::iterator cached = mAlphaCache.find(cache_index);
+            if (cached != mAlphaCache.end())
+            {
+                ll_aligned_free_32(cached->second);
+                mAlphaCache.erase(cached);
+            }
+
+            // clear out a slot if we have filled our cache
             S32 max_cache_entries = getTexLayerSet()->getAvatarAppearance()->isSelf() ? 4 : 1;
             while ((S32)mAlphaCache.size() >= max_cache_entries)
             {
@@ -1424,6 +1458,12 @@ void LLTexLayer::renderMorphMasks(S32 x, S32 y, S32 width, S32 height, const LLC
             size_t mem_size        = pixels * bytes_per_pixel;
 
             alpha_data = (U8*)ll_aligned_malloc_32(mem_size);
+            if (!alpha_data)
+            {
+                LLError::LLUserWarningMsg::showOutOfMemory();
+                LL_ERRS() << "Failed to allocate memory for morph texture: " << (S32)(mem_size) << LL_ENDL;
+                return;
+            }
 
             bool skip_readback = LLRender::sNsightDebugSupport; // nSight doesn't support use of glReadPixels
 
@@ -1433,6 +1473,13 @@ void LLTexLayer::renderMorphMasks(S32 x, S32 y, S32 width, S32 height, const LLC
                 { // work-around for broken intel drivers which cannot do glReadPixels on an RGBA FBO
                   // returning only the alpha portion without locking up downstream
                     U8* temp = (U8*)ll_aligned_malloc_32(mem_size << 2); // allocate same size, but RGBA
+                    if (!temp)
+                    {
+                        ll_aligned_free_32(alpha_data);
+                        LLError::LLUserWarningMsg::showOutOfMemory();
+                        LL_ERRS() << "Failed to allocate temporary memory for morph texture readback: " << (S32)(mem_size << 2) << LL_ENDL;
+                        return;
+                    }
 
                     if (bound_target)
                     {
@@ -1444,13 +1491,20 @@ void LLTexLayer::renderMorphMasks(S32 x, S32 y, S32 width, S32 height, const LLC
                     }
 
                     glGetTexImage(LLTexUnit::getInternalType(LLTexUnit::TT_TEXTURE), 0, GL_RGBA, GL_UNSIGNED_BYTE, temp);
-
-                    U8* alpha_cursor = alpha_data;
-                    U8* pixel        = temp;
-                    for (int i = 0; i < pixels; i++)
+                    GLenum error = glGetError();
+                    if (error != GL_NO_ERROR)
                     {
-                        *alpha_cursor++ = pixel[3];
-                        pixel += 4;
+                        LL_INFOS("Morph") << "GL Error while reading back morph texture. Error code: " << error << LL_ENDL;
+                    }
+                    else
+                    {
+                        U8* alpha_cursor = alpha_data;
+                        U8* pixel = temp;
+                        for (int i = 0; i < pixels; i++)
+                        {
+                            *alpha_cursor++ = pixel[3];
+                            pixel += 4;
+                        }
                     }
 
                     gGL.getTexUnit(0)->disable();
@@ -1462,6 +1516,13 @@ void LLTexLayer::renderMorphMasks(S32 x, S32 y, S32 width, S32 height, const LLC
                     // We just want GL_ALPHA, but that isn't supported in OGL core profile 4.
                     static const size_t TEMP_BYTES_PER_PIXEL = 4;
                     U8* temp_data = (U8*)ll_aligned_malloc_32(mem_size * TEMP_BYTES_PER_PIXEL);
+                    if (!temp_data)
+                    {
+                        ll_aligned_free_32(alpha_data);
+                        LLError::LLUserWarningMsg::showOutOfMemory();
+                        LL_ERRS() << "Failed to allocate temporary memory for morph texture: " << (S32)(mem_size * TEMP_BYTES_PER_PIXEL) << LL_ENDL;
+                        return;
+                    }
                     glReadPixels(x, y, width, height, GL_RGBA, GL_UNSIGNED_BYTE, temp_data);
                     for (size_t pixel = 0; pixel < pixels; pixel++) {
                         alpha_data[pixel] = temp_data[(pixel * TEMP_BYTES_PER_PIXEL) + 3];
@@ -1883,7 +1944,10 @@ LLGLTexture* LLTexLayerStaticImageList::getTexture(const std::string& file_name,
 
                 image_raw->copyUnscaledAlphaMask(alpha_image_raw, LLColor4U::black);
             }
-            tex->createGLTexture(0, image_raw, 0, true, LLGLTexture::LOCAL);
+            if (!tex->createGLTexture(0, image_raw, 0, true, LLGLTexture::LOCAL))
+            {
+                LL_WARNS() << "Failed to create GL texture for image: " << file_name << LL_ENDL;
+            }
 
             gGL.getTexUnit(0)->bind(tex);
             tex->setAddressMode(LLTexUnit::TAM_CLAMP);

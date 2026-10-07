@@ -34,7 +34,7 @@
 #include <Wbemidl.h>
 #elif LL_DARWIN
 #include <CoreFoundation/CoreFoundation.h>
-#include <IOKit/IOKitLib.h>
+#include "llwindowmacosx_iokit.h"
 #endif
 unsigned char static_unique_id[] =  {0,0,0,0,0,0};
 unsigned char static_legacy_id[] =  {0,0,0,0,0,0};
@@ -293,7 +293,7 @@ bool LLWMIMethods::getGenericSerialNumber(const BSTR &select, const LPCWSTR &var
         if (validate_as_uuid)
         {
             std::wstring ws(serialNumber, serial_size);
-            std::string str = ll_convert_wide_to_string(ws);
+            std::string str = ll_convert<std::string>(ws);
 
             if (!LLUUID::validate(str))
             {
@@ -315,7 +315,7 @@ bool LLWMIMethods::getGenericSerialNumber(const BSTR &select, const LPCWSTR &var
                 continue;
             }
         }
-        LL_INFOS("AppInit") << " Serial Number : " << vtProp.bstrVal << LL_ENDL;
+        LL_INFOS("AppInit") << " Serial Number : " << ll_convert_wide_to_string(std::wstring(vtProp.bstrVal, SysStringLen(vtProp.bstrVal))) << LL_ENDL;
 
         unsigned int j = 0;
 
@@ -350,7 +350,7 @@ bool LLWMIMethods::getGenericSerialNumber(const BSTR &select, const LPCWSTR &var
 bool getSerialNumber(unsigned char *unique_id, size_t len)
 {
     CFStringRef serial_cf_str = NULL;
-    io_service_t platformExpert = IOServiceGetMatchingService(kIOMasterPortDefault,
+    io_service_t platformExpert = IOServiceGetMatchingService(kLLIOMainPort,
                                                                  IOServiceMatching("IOPlatformExpertDevice"));
     if (platformExpert)
     {
@@ -398,6 +398,8 @@ bool getSerialNumber(unsigned char *unique_id, size_t len)
 
 S32 LLMachineID::init()
 {
+    LL_PROFILE_ZONE_SCOPED;
+
     size_t len = sizeof(static_unique_id);
     memset(static_unique_id, 0, len);
     S32 ret_code = 0;

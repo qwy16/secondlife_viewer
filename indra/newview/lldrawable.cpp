@@ -664,10 +664,15 @@ F32 LLDrawable::updateXform(bool undamped)
             // snap to final position (only if no target omega is applied)
             dist_squared = 0.0f;
             //set target scale here, because of dist_squared = 0.0f remove object from move list
-            mCurrentScale = target_scale;
-
-            if (getVOVolume() && !isRoot())
-            { //child prim snapping to some position, needs a rebuild
+            if (mCurrentScale != target_scale)
+            {
+                mCurrentScale = target_scale;
+                // Final scale change needs a rebuild
+                gPipeline.markRebuild(this, LLDrawable::REBUILD_POSITION);
+            }
+            else if (getVOVolume() && !isRoot())
+            {
+                //child prim snapping to some position, needs a rebuild
                 gPipeline.markRebuild(this, LLDrawable::REBUILD_POSITION);
             }
         }
@@ -723,9 +728,13 @@ F32 LLDrawable::updateXform(bool undamped)
     mXform.setRotation(target_rot);
     mXform.setScale(LLVector3(1,1,1)); //no scale in drawable transforms (IT'S A RULE!)
     mXform.updateMatrix();
-    if (isRoot() && mVObjp->isAnimatedObject() && mVObjp->getControlAvatar())
+    if (isRoot() && mVObjp->isAnimatedObject())
     {
-        mVObjp->getControlAvatar()->matchVolumeTransform();
+        LLControlAvatar* cav = mVObjp->getControlAvatar();
+        if (cav)
+        {
+            cav->matchVolumeTransform();
+        }
     }
 
     if (mSpatialBridge)
@@ -925,7 +934,10 @@ void LLDrawable::updateDistance(LLCamera& camera, bool force_update)
                 LLVector3 cam_pos_from_agent = LLViewerCamera::getInstance()->getOrigin();
                 LLVector3 cam_to_box_offset = point_to_box_offset(cam_pos_from_agent, av_box);
                 mDistanceWRTCamera = llmax(0.01f, ll_round(cam_to_box_offset.magVec(), 0.01f));
-                mVObjp->updateLOD();
+                if (mVObjp)
+                {
+                    mVObjp->updateLOD();
+                }
                 return;
             }
         }
@@ -936,7 +948,10 @@ void LLDrawable::updateDistance(LLCamera& camera, bool force_update)
 
         pos -= camera.getOrigin();
         mDistanceWRTCamera = ll_round(pos.magVec(), 0.01f);
-        mVObjp->updateLOD();
+        if (mVObjp)
+        {
+            mVObjp->updateLOD();
+        }
     }
 }
 
@@ -945,6 +960,11 @@ void LLDrawable::updateTexture()
     if (isDead())
     {
         LL_WARNS() << "Dead drawable updating texture!" << LL_ENDL;
+        return;
+    }
+
+    if (!mVObjp)
+    {
         return;
     }
 

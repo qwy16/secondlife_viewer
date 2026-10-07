@@ -31,15 +31,13 @@
 #include "m4math.h"
 #include "m3math.h"
 
-class LLMatrix4a
+class alignas(16) LLMatrix4a
 {
+    LL_ALIGN_NEW
 public:
-    LL_ALIGN_16(LLVector4a mMatrix[4]);
+    LLVector4a mMatrix[4];
 
-    LLMatrix4a()
-    {
-
-    }
+    LLMatrix4a() = default;
 
     explicit LLMatrix4a(const LLMatrix4& val)
     {
@@ -227,6 +225,8 @@ public:
 
     const LLVector4a& getTranslation() const { return mMatrix[3]; }
 };
+
+static_assert(std::is_trivial<LLMatrix4a>::value, "LLMatrix4a must be a trivial type");
 
 inline LLVector4a rowMul(const LLVector4a &row, const LLMatrix4a &mat)
 {

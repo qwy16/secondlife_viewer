@@ -40,8 +40,9 @@
 
 // LLMatrix3a is the base class for LLRotation, which should be used instead any time you're dealing with a
 // rotation matrix.
-class LLMatrix3a
+class alignas(16) LLMatrix3a
 {
+    LL_ALIGN_NEW
 public:
 
     // Utility function for quickly transforming an array of LLVector4a's
@@ -56,7 +57,7 @@ public:
     //////////////////////////
 
     // Ctor
-    LLMatrix3a() {}
+    LLMatrix3a() = default;
 
     // Ctor for setting by columns
     inline LLMatrix3a( const LLVector4a& c0, const LLVector4a& c1, const LLVector4a& c2 );
@@ -111,18 +112,22 @@ public:
 
 protected:
 
-    LL_ALIGN_16(LLVector4a mColumns[3]);
+    LLVector4a mColumns[3];
 
 };
+
+static_assert(std::is_trivial<LLMatrix3a>::value, "LLMatrix3a must be a trivial type");
 
 class LLRotation : public LLMatrix3a
 {
 public:
 
-    LLRotation() {}
+    LLRotation() = default;
 
     // Returns true if this rotation is orthonormal with det ~= 1
     inline bool isOkRotation() const;
 };
+
+static_assert(std::is_trivial<LLRotation>::value, "LLRotation must be a trivial type");
 
 #endif

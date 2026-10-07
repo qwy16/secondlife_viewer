@@ -60,9 +60,10 @@ public:
     /*virtual*/ void toggleVSync(bool enable_vsync) override { }
     /*virtual*/ bool setCursorPosition(LLCoordWindow position) override {return false;}
     /*virtual*/ bool getCursorPosition(LLCoordWindow *position) override {return false;}
-#if LL_WINDOWS
+#if LL_WINDOWS && !LL_SDL_WINDOW
     /*virtual*/ bool getCursorDelta(LLCoordCommon* delta) override { return false; }
 #endif
+    /*virtual*/ bool isWrapMouse() const override { return true; }
     /*virtual*/ void showCursor() override {}
     /*virtual*/ void hideCursor() override {}
     /*virtual*/ void showCursorFromMouseMove() override {}

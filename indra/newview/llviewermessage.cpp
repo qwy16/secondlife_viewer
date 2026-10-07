@@ -40,6 +40,7 @@
 #include "llinventorydefines.h"
 #include "lllslconstants.h"
 #include "llmaterialtable.h"
+#include "llmemory.h"
 #include "llregionhandle.h"
 #include "llsd.h"
 #include "llsdserialize.h"
@@ -162,8 +163,8 @@ void accept_friendship_coro(std::string url, LLSD notification)
 {
     LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
     LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t
-        httpAdapter(new LLCoreHttpUtil::HttpCoroutineAdapter("friendshipResponceErrorProcessing", httpPolicy));
-    LLCore::HttpRequest::ptr_t httpRequest(new LLCore::HttpRequest);
+        httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>("friendshipResponceErrorProcessing", httpPolicy);
+    LLCore::HttpRequest::ptr_t httpRequest = std::make_shared<LLCore::HttpRequest>();
     if (url.empty())
     {
         LL_WARNS("Friendship") << "Empty capability!" << LL_ENDL;
@@ -212,8 +213,8 @@ void decline_friendship_coro(std::string url, LLSD notification, S32 option)
     }
     LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
     LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t
-        httpAdapter(new LLCoreHttpUtil::HttpCoroutineAdapter("friendshipResponceErrorProcessing", httpPolicy));
-    LLCore::HttpRequest::ptr_t httpRequest(new LLCore::HttpRequest);
+        httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>("friendshipResponceErrorProcessing", httpPolicy);
+    LLCore::HttpRequest::ptr_t httpRequest = std::make_shared<LLCore::HttpRequest>();
 
     LLSD payload = notification["payload"];
     url += "?from=" + payload["from_id"].asString();
@@ -418,7 +419,26 @@ void send_complete_agent_movement(const LLHost& sim_host)
     msg->addUUIDFast(_PREHASH_AgentID, gAgent.getID());
     msg->addUUIDFast(_PREHASH_SessionID, gAgent.getSessionID());
     msg->addU32Fast(_PREHASH_CircuitCode, msg->mOurCircuitCode);
-    msg->sendReliable(sim_host);
+
+    // build a lambda to be used as callback on ACK or timeout
+    void (*complete_agent_movement_callback)(void**, S32) = [](void**, S32 result)
+    {
+        if(LLApp::isExiting()) return;
+        if (result != LL_ERR_NOERR)
+        {
+            LL_WARNS("Messaging") << "CompleteAgentMovement failed with err=" << result << LL_ENDL;
+        }
+    };
+
+    // We use same retry strategy as UseCircuitCode because this is a crucial message
+    // that MUST arrive else we'll suffer a failed login/teleport/region-cross
+    msg->sendReliable(
+        sim_host,
+        gSavedSettings.getS32("UseCircuitCodeMaxRetries"),
+        false,
+        (F32Seconds)gSavedSettings.getF32("UseCircuitCodeTimeout"),
+        complete_agent_movement_callback,
+        NULL);
 }
 
 void process_logout_reply(LLMessageSystem* msg, void**)
@@ -570,8 +590,8 @@ void response_group_invitation_coro(std::string url, LLUUID group_id, bool notif
 
     LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
     LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t
-        httpAdapter(new LLCoreHttpUtil::HttpCoroutineAdapter("responseGroupInvitation", httpPolicy));
-    LLCore::HttpRequest::ptr_t httpRequest(new LLCore::HttpRequest);
+        httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>("responseGroupInvitation", httpPolicy);
+    LLCore::HttpRequest::ptr_t httpRequest = std::make_shared<LLCore::HttpRequest>();
 
     LLSD payload;
     payload["group"] = group_id;
@@ -1558,6 +1578,7 @@ void LLOfferInfo::sendReceiveResponse(bool accept, const LLUUID &destination_fol
     if (mTransactionID.isNull())
     {
         // Not provided, message won't work
+        LL_WARNS("Messaging") << "Missing transaction id, response for " << mIM << " won't work" << LL_ENDL;
         return;
     }
 
@@ -1600,6 +1621,8 @@ void LLOfferInfo::sendReceiveResponse(bool accept, const LLUUID &destination_fol
         msg->addU8Fast(_PREHASH_Dialog, (U8)(im + 1));
         msg->addBinaryDataFast(_PREHASH_BinaryBucket, &(destination_folder_id.mData),
                                 sizeof(destination_folder_id.mData));
+
+        LL_DEBUGS("Messaging") << "Processing" << (U8)(im + 1) << " with transaction id " << mTransactionID << LL_ENDL;
     }
     else
     {
@@ -2014,7 +2037,7 @@ bool lure_callback(const LLSD& notification, const LLSD& response)
 
     if (notification_ptr)
     {
-        LLNotificationFormPtr modified_form(new LLNotificationForm(*notification_ptr->getForm()));
+        LLNotificationFormPtr modified_form = std::make_shared<LLNotificationForm>(*notification_ptr->getForm());
         modified_form->setElementEnabled("Teleport", false);
         modified_form->setElementEnabled("Cancel", false);
         notification_ptr->updateForm(modified_form);
@@ -2435,6 +2458,8 @@ void process_chat_from_simulator(LLMessageSystem *msg, void **user_data)
 
         color.setVec(1.f,1.f,1.f,1.f);
         msg->getStringFast(_PREHASH_ChatData, _PREHASH_Message, mesg);
+        // Preserve tabs from scripts by expanding them to spaces before any sanitization/formatting.
+        LLStringUtil::replaceTabsWithSpaces(mesg, 4);
 
         bool ircstyle = false;
 
@@ -3052,6 +3077,11 @@ void process_agent_movement_complete(LLMessageSystem* msg, void**)
         }
     }
 
+#ifdef LL_DISCORD
+    if (gSavedSettings.getBOOL("EnableDiscord"))
+        LLAppViewer::updateDiscordActivity();
+#endif
+
     if ( LLTracker::isTracking(NULL) )
     {
         // Check distance to beacon, if < 5m, remove beacon
@@ -3134,7 +3164,10 @@ void process_crossed_region(LLMessageSystem* msg, void**)
         return;
     }
     LL_INFOS("Messaging") << "process_crossed_region()" << LL_ENDL;
-    gAgentAvatarp->resetRegionCrossingTimer();
+    if (isAgentAvatarValid())
+    {
+        gAgentAvatarp->resetRegionCrossingTimer();
+    }
 
     U32 sim_ip;
     msg->getIPAddrFast(_PREHASH_RegionData, _PREHASH_SimIP, sim_ip);
@@ -3189,6 +3222,7 @@ void send_agent_update(bool force_send, bool send_reliable)
 
     static F64          last_send_time = 0.0;
     static U32          last_control_flags = 0;
+    static bool         control_flags_follow_up = false;
     static U8           last_render_state = 0;
     static U8           last_flags = AU_FLAGS_NONE;
     static LLQuaternion last_body_rot,
@@ -3261,6 +3295,20 @@ void send_agent_update(bool force_send, bool send_reliable)
 
             // check flags
             if (last_flags != flags)
+            {
+                send_update = true;
+                break;
+            }
+
+            // example:
+            // user taps crouch (control_flags 4128), viewer sends 4128 then immediately 0
+            // server starts crouching motion but does not stop it, only once viewer sends 0
+            // second time will server stop the motion. follow_up exists to make sure all
+            // states like 'crouch' motion are properly cleared server side.
+            //
+            // P.S. Server probably shouldn't require a reminder to stop a motion,
+            // but at the moment it does.
+            if (control_flags_follow_up)
             {
                 send_update = true;
                 break;
@@ -3344,6 +3392,15 @@ void send_agent_update(bool force_send, bool send_reliable)
     msg->addVector3Fast(_PREHASH_CameraUpAxis, LLViewerCamera::getInstance()->getUpAxis());
 
     static F32 last_draw_disatance_step = 1024;
+    F32 memory_limited_draw_distance = gAgentCamera.mDrawDistance;
+    const F32 mem_factor = LLMemory::getSystemMemoryBudgetFactor();
+    if (mem_factor > 1.f)
+    {
+        // We are critically low on memory or recovering,
+        // limit requested draw distance
+        memory_limited_draw_distance = llmax(gAgentCamera.mDrawDistance / mem_factor, gAgentCamera.mDrawDistance / 2.f);
+    }
+
     if (tp_state == LLAgent::TELEPORT_ARRIVING || LLStartUp::getStartupState() < STATE_MISC)
     {
         // Inform interest list, prioritize closer area.
@@ -3352,25 +3409,25 @@ void send_agent_update(bool force_send, bool send_reliable)
         // closer ones.
         // Todo: revise and remove once server gets distance sorting.
         last_draw_disatance_step = llmax((F32)(gAgentCamera.mDrawDistance / 2.f), 50.f);
+        last_draw_disatance_step = llmin(last_draw_disatance_step, memory_limited_draw_distance);
         msg->addF32Fast(_PREHASH_Far, last_draw_disatance_step);
     }
-    else if (last_draw_disatance_step < gAgentCamera.mDrawDistance)
+    else if (last_draw_disatance_step < memory_limited_draw_distance)
     {
         static LLFrameTimer last_step_time;
         if (last_step_time.getElapsedTimeF32() > 1.f)
         {
             // gradually increase draw distance
-            // Idealy this should be not per second, but based on how loaded
-            // mesh thread is, but hopefully this is temporary.
             last_step_time.reset();
-            F32 step = gAgentCamera.mDrawDistance * 0.1f;
-            last_draw_disatance_step = llmin(last_draw_disatance_step + step, gAgentCamera.mDrawDistance);
+            F32 step = memory_limited_draw_distance * 0.1f;
+            last_draw_disatance_step = llmin(last_draw_disatance_step + step, memory_limited_draw_distance);
         }
         msg->addF32Fast(_PREHASH_Far, last_draw_disatance_step);
     }
     else
     {
-        msg->addF32Fast(_PREHASH_Far, gAgentCamera.mDrawDistance);
+        last_draw_disatance_step = memory_limited_draw_distance;
+        msg->addF32Fast(_PREHASH_Far, memory_limited_draw_distance);
     }
 
     msg->addU32Fast(_PREHASH_ControlFlags, control_flags);
@@ -3399,6 +3456,7 @@ void send_agent_update(bool force_send, bool send_reliable)
 
     // remember last update data
     last_send_time = now;
+    control_flags_follow_up = last_control_flags != control_flags;
     last_control_flags = control_flags;
     last_render_state = render_state;
     last_flags = flags;
@@ -3519,6 +3577,7 @@ extern U32Bits gObjectData;
 
 void process_object_update(LLMessageSystem *mesgsys, void **user_data)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_NETWORK;
     // Update the data counters
     if (mesgsys->getReceiveCompressedSize())
     {
@@ -3540,6 +3599,7 @@ void process_object_update(LLMessageSystem *mesgsys, void **user_data)
 
 void process_compressed_object_update(LLMessageSystem *mesgsys, void **user_data)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_NETWORK;
     // Update the data counters
     if (mesgsys->getReceiveCompressedSize())
     {
@@ -3561,6 +3621,7 @@ void process_compressed_object_update(LLMessageSystem *mesgsys, void **user_data
 
 void process_cached_object_update(LLMessageSystem *mesgsys, void **user_data)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_NETWORK;
     // Update the data counters
     if (mesgsys->getReceiveCompressedSize())
     {
@@ -3578,6 +3639,7 @@ void process_cached_object_update(LLMessageSystem *mesgsys, void **user_data)
 
 void process_terse_object_update_improved(LLMessageSystem *mesgsys, void **user_data)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_NETWORK;
     if (mesgsys->getReceiveCompressedSize())
     {
         gObjectData += (U32Bytes)mesgsys->getReceiveCompressedSize();
@@ -3648,7 +3710,7 @@ void process_kill_object(LLMessageSystem *mesgsys, void **user_data)
             gObjectList.killObject(objectp);
         }
 
-        if(delete_object)
+        if(delete_object && regionp)
         {
             regionp->killCacheEntry(local_id);
         }
@@ -3698,9 +3760,7 @@ void process_sound_trigger(LLMessageSystem *msg, void **)
 {
     if (!gAudiop)
     {
-#if !LL_LINUX
         LL_WARNS("AudioEngine") << "LLAudioEngine instance doesn't exist!" << LL_ENDL;
-#endif
         return;
     }
 
@@ -3772,9 +3832,7 @@ void process_preload_sound(LLMessageSystem *msg, void **user_data)
 {
     if (!gAudiop)
     {
-#if !LL_LINUX
         LL_WARNS("AudioEngine") << "LLAudioEngine instance doesn't exist!" << LL_ENDL;
-#endif
         return;
     }
 
@@ -3937,6 +3995,7 @@ void process_sim_stats(LLMessageSystem *msg, void **user_data)
 
 void process_avatar_animation(LLMessageSystem *mesgsys, void **user_data)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_NETWORK;
     LLUUID  animation_id;
     LLUUID  uuid;
     S32     anim_sequence_id;
@@ -4048,6 +4107,7 @@ void process_avatar_animation(LLMessageSystem *mesgsys, void **user_data)
 
 void process_object_animation(LLMessageSystem *mesgsys, void **user_data)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_NETWORK;
     LLUUID  animation_id;
     LLUUID  uuid;
     S32     anim_sequence_id;
@@ -4113,6 +4173,7 @@ void process_object_animation(LLMessageSystem *mesgsys, void **user_data)
 
 void process_avatar_appearance(LLMessageSystem *mesgsys, void **user_data)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_NETWORK;
     LLUUID uuid;
     mesgsys->getUUIDFast(_PREHASH_Sender, _PREHASH_ID, uuid);
 
@@ -4120,11 +4181,12 @@ void process_avatar_appearance(LLMessageSystem *mesgsys, void **user_data)
     if (avatarp)
     {
         avatarp->processAvatarAppearance( mesgsys );
+        return;
     }
-    else
-    {
-        LL_WARNS("Messaging") << "avatar_appearance sent for unknown avatar " << uuid << LL_ENDL;
-    }
+    // The avatar object doesn't exist yet.
+    // We will re-request its appearance data after it is created.
+    LLVOAvatar::registerEarlyAppearance(uuid);
+    LL_WARNS("Messaging") << "AvatarAppearance received for avatar " << uuid << " before object created" << LL_ENDL;
 }
 
 void process_camera_constraint(LLMessageSystem *mesgsys, void **user_data)
@@ -4201,6 +4263,10 @@ void process_clear_follow_cam_properties(LLMessageSystem *mesgsys, void **user_d
     mesgsys->getUUIDFast(_PREHASH_ObjectData, _PREHASH_ObjectID, source_id);
 
     LLFollowCamMgr::getInstance()->removeFollowCamParams(source_id);
+    if (!LLFollowCamMgr::getInstance()->getActiveFollowCamParams())
+    {
+        gAgentCamera.notifyFollowCamParamsCleared();
+    }
 }
 
 void process_set_follow_cam_properties(LLMessageSystem *mesgsys, void **user_data)
@@ -4270,6 +4336,10 @@ void process_set_follow_cam_properties(LLMessageSystem *mesgsys, void **user_dat
         case FOLLOWCAM_ACTIVE:
             //if 1, set using followcam,.
             LLFollowCamMgr::getInstance()->setCameraActive(source_id, value != 0.f);
+            if (value == 0.f && !LLFollowCamMgr::getInstance()->getActiveFollowCamParams())
+            {
+                gAgentCamera.notifyFollowCamParamsCleared();
+            }
             break;
         case FOLLOWCAM_POSITION_X:
             settingPosition = true;
@@ -4866,10 +4936,12 @@ bool handle_teleport_access_blocked(LLSD& llsdBlock, const std::string & notific
     {
         U8 regionAccess = static_cast<U8>(llsdBlock["_region_access"].asInteger());
         std::string regionMaturity = LLViewerRegion::accessToString(regionAccess);
+        llsdBlock["REGIONMATURITY_CAP"] = regionMaturity;
         LLStringUtil::toLower(regionMaturity);
         llsdBlock["REGIONMATURITY"] = regionMaturity;
 
         LLNotificationPtr tp_failure_notification;
+        bool skip_notif = false;
         std::string notifySuffix;
 
         if (notificationID == std::string("TeleportEntryAccessBlocked"))
@@ -4939,21 +5011,39 @@ bool handle_teleport_access_blocked(LLSD& llsdBlock, const std::string & notific
             }
         }       // End of special handling for "TeleportEntryAccessBlocked"
         else
-        {   // Normal case, no message munging
-            gAgent.clearTeleportRequest();
-            if (LLNotifications::getInstance()->templateExists(notificationID))
+        {
+            if (notificationID == "RegionTPAccessBlocked")
             {
-                tp_failure_notification = LLNotificationsUtil::add(notificationID, llsdBlock, llsdBlock);
+                bool can_change_maturity = (regionAccess == SIM_ACCESS_MATURE) ? gAgent.isMature() : gAgent.isAdult();
+                if (can_change_maturity)
+                {
+                    LLFloaterReg::showInstance("maturity_dialog", LLSD((S32)regionAccess));
+                    skip_notif = true;
+                }
+                else
+                {
+                    gAgent.clearTeleportRequest();
+                    tp_failure_notification = LLNotificationsUtil::add("RegionTPAccessBlocked_NotifyAdultsOnly", llsdBlock);
+                }
             }
             else
             {
-                llsdBlock["MESSAGE"] = defaultMessage;
-                tp_failure_notification = LLNotificationsUtil::add("GenericAlertOK", llsdBlock);
+                // Normal case, no message munging
+                gAgent.clearTeleportRequest();
+                if (LLNotifications::getInstance()->templateExists(notificationID))
+                {
+                    tp_failure_notification = LLNotificationsUtil::add(notificationID, llsdBlock, llsdBlock);
+                }
+                else
+                {
+                    llsdBlock["MESSAGE"] = defaultMessage;
+                    tp_failure_notification = LLNotificationsUtil::add("GenericAlertOK", llsdBlock);
+                }
             }
             returnValue = true;
         }
 
-        if ((tp_failure_notification == NULL) || tp_failure_notification->isIgnored())
+        if (((tp_failure_notification == NULL) || tp_failure_notification->isIgnored()) && !skip_notif)
         {
             // Given a simple notification if no tp_failure_notification is set or it is ignore
             LLNotificationsUtil::add(notificationID + notifySuffix, llsdBlock);
@@ -5644,6 +5734,7 @@ void process_script_experience_details(const LLSD& experience_details, LLSD args
 
 void process_script_question(LLMessageSystem *msg, void **user_data)
 {
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_NETWORK;
     // *TODO: Translate owner name -> [FIRST] [LAST]
 
     LLHost sender = msg->getSender();
@@ -5714,26 +5805,38 @@ void process_script_question(LLMessageSystem *msg, void **user_data)
         args["NAME"] = clean_owner_name;
         S32 known_questions = 0;
         bool has_not_only_debit = questions ^ SCRIPT_PERMISSIONS[SCRIPT_PERMISSION_DEBIT].permbit;
+        bool caution_enabled    = gSavedSettings.getBOOL("PermissionsCautionEnabled");
         // check the received permission flags against each permission
+        std::string warning_msg;
         for (const script_perm_t& script_perm : SCRIPT_PERMISSIONS)
         {
             if (questions & script_perm.permbit)
             {
-                count++;
                 known_questions |= script_perm.permbit;
                 // check whether permission question should cause special caution dialog
                 caution |= (script_perm.caution);
 
-                if (("ScriptTakeMoney" == script_perm.question) && has_not_only_debit)
+                // Cautions go into top part of the dialog, questions go into the footer
+                if (caution_enabled && script_perm.caution)
+                {
+                    warning_msg += "\n" + LLTrans::getString(script_perm.question + "Caution") + "\n";
                     continue;
+                }
 
                 if (LLTrans::getString(script_perm.question).empty())
                 {
                     continue;
                 }
 
-                script_question += "    " + LLTrans::getString(script_perm.question) + "\n";
+                count++;
+                script_question += "\n    " + LLTrans::getString(script_perm.question);
             }
+        }
+
+        if (!warning_msg.empty())
+        {
+            LLStringUtil::format(warning_msg, args);
+            args["WARNINGS"] = warning_msg;
         }
 
         args["QUESTIONS"] = script_question;
@@ -5760,12 +5863,12 @@ void process_script_question(LLMessageSystem *msg, void **user_data)
             // check whether cautions are even enabled or not
             const char* notification = "ScriptQuestion";
 
-            if(caution && gSavedSettings.getBOOL("PermissionsCautionEnabled"))
+            if(caution && caution_enabled)
             {
-                args["FOOTERTEXT"] = (count > 1) ? LLTrans::getString("AdditionalPermissionsRequestHeader") + "\n\n" + script_question : "";
+                args["FOOTERTEXT"] = (count > 0) ? LLTrans::getString("AdditionalPermissionsRequestHeader") + "\n" + script_question : "";
                 notification = "ScriptQuestionCaution";
             }
-            else if(experienceid.notNull())
+            else if (experienceid.notNull())
             {
                 payload["experience"]=experienceid;
                 LLExperienceCache::instance().get(experienceid, boost::bind(process_script_experience_details, _1, args, payload));
@@ -6914,4 +7017,3 @@ void LLOfferInfo::forceResponse(InventoryOfferResponse response)
     params.functor.function(boost::bind(&LLOfferInfo::inventory_offer_callback, this, _1, _2));
     LLNotifications::instance().forceResponse(params, response);
 }
-

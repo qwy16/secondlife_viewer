@@ -28,9 +28,10 @@
 #define LL_LLTHREAD_H
 
 #include "llapr.h"
-#include "boost/intrusive_ptr.hpp"
 #include "llrefcount.h"
 #include <thread>
+
+extern void set_thread_name(const char* threadName);
 
 namespace LLTrace
 {
@@ -86,17 +87,17 @@ public:
 
     id_t getID() const { return mID; }
 
-    // Called by threads *not* created via LLThread to register some
-    // internal state used by LLMutex.  You must call this once early
-    // in the running thread to prevent collisions with the main thread.
-    static void registerThreadID();
-
 private:
     bool                mPaused;
     std::thread::native_handle_type mNativeHandle; // for termination in case of issues
 
     // static function passed to APR thread creation routine
     void threadRun();
+    void tryRun();
+
+#ifdef LL_WINDOWS
+    void sehHandle();
+#endif
 
 protected:
     std::string         mName;

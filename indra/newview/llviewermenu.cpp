@@ -75,6 +75,7 @@
 #include "llfloatersearch.h"
 #include "llfloaterscriptdebug.h"
 #include "llfloatersnapshot.h"
+#include "llscripteditorws.h"
 #include "llfloatertools.h"
 #include "llfloaterworldmap.h"
 #include "llfloaterbuildoptions.h"
@@ -85,6 +86,7 @@
 #include "lltoolface.h"
 #include "llhints.h"
 #include "llhudeffecttrail.h"
+#include "llhudeffectresetskeleton.h"
 #include "llhudmanager.h"
 #include "llimview.h"
 #include "llinventorybridge.h"
@@ -122,11 +124,11 @@
 #include "llviewernetwork.h"
 #include "llviewerobjectlist.h"
 #include "llviewerparcelmgr.h"
+#include "llviewerregion.h"
 #include "llviewerstats.h"
 #include "llviewerstatsrecorder.h"
 #include "llvlcomposition.h"
 #include "llvoavatarself.h"
-#include "llvoicevivox.h"
 #include "llworld.h"
 #include "llworldmap.h"
 #include "pipeline.h"
@@ -139,7 +141,7 @@
 #include "llwindow.h"
 #include "llpathfindingmanager.h"
 #include "llstartup.h"
-#include "boost/unordered_map.hpp"
+#include <unordered_map>
 #include <boost/regex.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/json.hpp>
@@ -152,7 +154,7 @@ using namespace LLAvatarAppearanceDefines;
 
 typedef LLPointer<LLViewerObject> LLViewerObjectPtr;
 
-static boost::unordered_map<std::string, LLStringExplicit> sDefaultItemLabels;
+static std::unordered_map<std::string, LLStringExplicit> sDefaultItemLabels;
 
 LLVOAvatar* find_avatar_from_object(LLViewerObject* object);
 LLVOAvatar* find_avatar_from_object(const LLUUID& object_id);
@@ -289,6 +291,7 @@ void force_error_coroutine_crash();
 void force_error_coroprocedure_crash();
 void force_error_work_queue_crash();
 void force_error_thread_crash();
+void force_exception_thread_crash();
 
 void handle_force_delete();
 void print_object_info();
@@ -411,7 +414,23 @@ static LLSLMMenuUpdater* gSLMMenuUpdater = NULL;
 
 LLSLMMenuUpdater::LLSLMMenuUpdater()
 {
-    mMarketplaceListingsItem = gMenuHolder->getChild<LLView>("MarketplaceListings")->getHandle();
+    LLView* me_menu = gMenuHolder->findChild<LLView>("Me");
+    if (!me_menu)
+    {
+        LLError::LLUserWarningMsg::showMissingFiles();
+        LL_ERRS() << "Can't find 'Me' menu in 'menu_viewer'" << LL_ENDL;
+        return;
+    }
+
+    LLView* marketplace_listings = me_menu->findChild<LLView>("MarketplaceListings");
+    if (!marketplace_listings)
+    {
+        LLError::LLUserWarningMsg::showMissingFiles();
+        LL_ERRS() << "Can't find 'MarketplaceListings' in 'Me' menu" << LL_ENDL;
+        return;
+    }
+
+    mMarketplaceListingsItem = marketplace_listings->getHandle();
 }
 void LLSLMMenuUpdater::setMerchantMenu()
 {
@@ -423,7 +442,7 @@ void LLSLMMenuUpdater::setMerchantMenu()
     LLCommand* command = LLCommandManager::instance().getCommand("marketplacelistings");
     gToolBarView->enableCommand(command->id(), true);
 
-    const LLUUID marketplacelistings_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+    const LLUUID marketplacelistings_id = gInventory.getMarketplaceListingsUUID();
     if (marketplacelistings_id.isNull())
     {
         U32 mkt_status = LLMarketplaceData::instance().getSLMStatus();
@@ -471,6 +490,8 @@ void check_merchant_status(bool force)
 
 void init_menus()
 {
+    LL_PROFILE_ZONE_SCOPED;
+
     // Initialize actions
     initialize_menus();
 
@@ -547,7 +568,29 @@ void init_menus()
         color = LLUIColorTable::instance().getColor( "MenuNonProductionBgColor" );
     }
 
-    LLView* menu_bar_holder = gViewerWindow->getRootView()->getChildView("menu_bar_holder");
+    LLView* menu_stack = gViewerWindow->getMainView()->findChildView("menu_stack");
+    if (!menu_stack)
+    {
+        LLError::LLUserWarningMsg::showMissingFiles();
+        LL_ERRS() << "Can't find menu_stack in main_view" << LL_ENDL;
+        return;
+    }
+
+    LLView* status_bar_container = menu_stack->findChildView("status_bar_container");
+    if (!status_bar_container)
+    {
+        LLError::LLUserWarningMsg::showMissingFiles();
+        LL_ERRS() << "Can't find status_bar_container in main_view" << LL_ENDL;
+        return;
+    }
+
+    LLView* menu_bar_holder = status_bar_container->findChildView("menu_bar_holder");
+    if (!menu_bar_holder)
+    {
+        LLError::LLUserWarningMsg::showMissingFiles();
+        LL_ERRS() << "Can't find status_bar_container in main_view" << LL_ENDL;
+        return;
+    }
 
     gMenuBarView = LLUICtrlFactory::getInstance()->createFromFile<LLMenuBarGL>("menu_viewer.xml", gMenuHolder, LLViewerMenuHolderGL::child_registry_t::instance());
     gMenuBarView->setRect(LLRect(0, menu_bar_holder->getRect().mTop, 0, menu_bar_holder->getRect().mTop - MENU_BAR_HEIGHT));
@@ -561,21 +604,39 @@ void init_menus()
     // *TODO:Also fix cost in llfolderview.cpp for Inventory menus
     const std::string sound_upload_cost_str = std::to_string(LLAgentBenefitsMgr::current().getSoundUploadCost());
     const std::string animation_upload_cost_str = std::to_string(LLAgentBenefitsMgr::current().getAnimationUploadCost());
-    gMenuHolder->childSetLabelArg("Upload Sound", "[COST]", sound_upload_cost_str);
-    gMenuHolder->childSetLabelArg("Upload Animation", "[COST]", animation_upload_cost_str);
+
+    LLView* main_upload_menu = gMenuHolder->findChild<LLView>("Upload");
+    if (!main_upload_menu)
+    {
+        LLError::LLUserWarningMsg::showMissingFiles();
+        LL_ERRS() << "Can't find 'Upload' menu in 'menu_viewer'" << LL_ENDL;
+        return;
+    }
+
+    LLView* upload_sound = main_upload_menu->findChild<LLView>("Upload Sound");
+    if (!upload_sound)
+    {
+        LLError::LLUserWarningMsg::showMissingFiles();
+        LL_ERRS() << "Can't find 'Upload Sound' menu item in 'Upload' menu" << LL_ENDL;
+        return;
+    }
+    upload_sound->setLabelArg("[COST]", sound_upload_cost_str);
+
+    LLView* upload_anim = main_upload_menu->findChild<LLView>("Upload Animation");
+    if (!upload_anim)
+    {
+        LLError::LLUserWarningMsg::showMissingFiles();
+        LL_ERRS() << "Can't find 'Upload Animation' menu item in 'Upload' menu" << LL_ENDL;
+        return;
+    }
+    upload_anim->setLabelArg("[COST]", animation_upload_cost_str);
+
 
     gAttachSubMenu = gMenuBarView->findChildMenuByName("Attach Object", true);
     gDetachSubMenu = gMenuBarView->findChildMenuByName("Detach Object", true);
 
     gDetachAvatarMenu = gMenuHolder->getChild<LLMenuGL>("Avatar Detach", true);
     gDetachHUDAvatarMenu = gMenuHolder->getChild<LLMenuGL>("Avatar Detach HUD", true);
-
-    // Don't display the Memory console menu if the feature is turned off
-    LLMenuItemCheckGL *memoryMenu = gMenuBarView->getChild<LLMenuItemCheckGL>("Memory", true);
-    if (memoryMenu)
-    {
-        memoryMenu->setVisible(false);
-    }
 
     gMenuBarView->createJumpKeys();
 
@@ -589,7 +650,7 @@ void init_menus()
     LLRect menuBarRect = gLoginMenuBarView->getRect();
     menuBarRect.setLeftTopAndSize(0, menu_bar_holder->getRect().getHeight(), menuBarRect.getWidth(), menuBarRect.getHeight());
     gLoginMenuBarView->setRect(menuBarRect);
-    gLoginMenuBarView->setBackgroundColor( color );
+    gLoginMenuBarView->setBackgroundColor(LLColor4::black);
     menu_bar_holder->addChild(gLoginMenuBarView);
 
     // tooltips are on top of EVERYTHING, including menus
@@ -1846,7 +1907,6 @@ class LLAdvancedAppearanceToXML : public view_listener_t
 {
     bool handleEvent(const LLSD& userdata)
     {
-        std::string emptyname;
         LLViewerObject *obj = LLSelectMgr::getInstance()->getSelection()->getPrimaryObject();
         LLVOAvatar *avatar = NULL;
         if (obj)
@@ -1873,7 +1933,7 @@ class LLAdvancedAppearanceToXML : public view_listener_t
         }
         if (avatar)
         {
-            avatar->dumpArchetypeXML(emptyname);
+            avatar->dumpArchetypeXML(LLStringUtil::null);
         }
         return true;
     }
@@ -2240,7 +2300,7 @@ class LLAdvancedDropPacket : public view_listener_t
 {
     bool handleEvent(const LLSD& userdata)
     {
-        gMessageSystem->mPacketRing.dropPackets(1);
+        gMessageSystem->dropPackets(1);
         return true;
     }
 };
@@ -2663,6 +2723,15 @@ class LLAdvancedForceErrorThreadCrash : public view_listener_t
     }
 };
 
+class LLAdvancedForceExceptionThreadCrash : public view_listener_t
+{
+    bool handleEvent(const LLSD& userdata)
+    {
+        force_exception_thread_crash();
+        return true;
+    }
+};
+
 class LLAdvancedForceErrorDisconnectViewer : public view_listener_t
 {
     bool handleEvent(const LLSD& userdata)
@@ -2949,11 +3018,45 @@ void handle_object_show_original()
     show_item_original(object->getAttachmentItemID());
 }
 
+void handle_object_set_favorite(const LLSD& userdata)
+{
+    LLViewerObject* object = LLSelectMgr::getInstance()->getSelection()->getPrimaryObject();
+    if (!object)
+    {
+        return;
+    }
+    LLViewerObject *parent = (LLViewerObject*)object->getParent();
+    while (parent)
+    {
+        if(parent->isAvatar())
+        {
+            break;
+        }
+        object = parent;
+        parent = (LLViewerObject*)parent->getParent();
+    }
+    if (!object || object->isAvatar())
+    {
+        return;
+    }
+
+    LLUUID item_id = gInventory.getLinkedItemID(object->getAttachmentItemID());
+
+    std::string action = userdata.asString();
+    if (action == "Add")
+    {
+        set_favorite(item_id, true);
+    }
+    if (action == "Remove")
+    {
+        set_favorite(item_id, false);
+    }
+}
 
 static void init_default_item_label(LLUICtrl* ctrl)
 {
     const std::string& item_name = ctrl->getName();
-    boost::unordered_map<std::string, LLStringExplicit>::iterator it = sDefaultItemLabels.find(item_name);
+    std::unordered_map<std::string, LLStringExplicit>::iterator it = sDefaultItemLabels.find(item_name);
     if (it == sDefaultItemLabels.end())
     {
         // *NOTE: This will not work for items of type LLMenuItemCheckGL because they return boolean value
@@ -2969,7 +3072,7 @@ static void init_default_item_label(LLUICtrl* ctrl)
 static LLStringExplicit get_default_item_label(const std::string& item_name)
 {
     LLStringExplicit res("");
-    boost::unordered_map<std::string, LLStringExplicit>::iterator it = sDefaultItemLabels.find(item_name);
+    std::unordered_map<std::string, LLStringExplicit>::iterator it = sDefaultItemLabels.find(item_name);
     if (it != sDefaultItemLabels.end())
     {
         res = it->second;
@@ -3004,6 +3107,41 @@ bool enable_object_touch(LLUICtrl* ctrl)
 
     return new_value;
 };
+
+bool enable_object_favorite(const LLSD& userdata)
+{
+    LLViewerObject* object = LLSelectMgr::getInstance()->getSelection()->getPrimaryObject();
+    if (!object)
+    {
+        return false;
+    }
+    LLViewerObject* parent = (LLViewerObject*)object->getParent();
+    while (parent)
+    {
+        if (parent->isAvatar())
+        {
+            break;
+        }
+        object = parent;
+        parent = (LLViewerObject*)parent->getParent();
+    }
+    if (!object || object->isAvatar())
+    {
+        return false;
+    }
+
+    std::string action = userdata.asString();
+    LLUUID item_id = gInventory.getLinkedItemID(object->getAttachmentItemID());
+    if (action == "Add")
+    {
+        return !get_is_favorite(item_id);
+    }
+    if (action == "Remove")
+    {
+        return get_is_favorite(item_id);
+    }
+    return false;
+}
 
 //void label_touch(std::string& label, void*)
 //{
@@ -3575,7 +3713,7 @@ class LLAvatarSetImpostorMode : public view_listener_t
                 return false;
         }
 
-        LLVOAvatar::cullAvatarsByPixelArea();
+        LLVOAvatar::setCullNeedsUpdate();
         return true;
     }   // handleEvent()
 };
@@ -3914,17 +4052,6 @@ void handle_avatar_eject(const LLSD& avatar_id)
                 }
             }
         }
-}
-
-bool my_profile_visible()
-{
-    LLFloater* floaterp = LLAvatarActions::getProfileFloater(gAgentID);
-    return floaterp && floaterp->isInVisibleChain();
-}
-
-bool picks_tab_visible()
-{
-    return my_profile_visible() && LLAvatarActions::isPickTabSelected(gAgentID);
 }
 
 bool enable_freeze_eject(const LLSD& avatar_id)
@@ -4344,13 +4471,6 @@ void set_god_level(U8 god_level)
 
     // changing god-level can affect which menus we see
     show_debug_menus();
-
-    // changing god-level can invalidate search results
-    LLFloaterSearch *search = dynamic_cast<LLFloaterSearch*>(LLFloaterReg::getInstance("search"));
-    if (search)
-    {
-        search->godLevelChanged(god_level);
-    }
 }
 
 #ifdef TOGGLE_HACKED_GODLIKE_VIEWER
@@ -5006,6 +5126,31 @@ static void derez_objects(EDeRezDestination dest, const LLUUID& dest_id)
     derez_objects(dest, dest_id, first_region, error, NULL);
 }
 
+bool save_object_back_to_contents(LLViewerObject* object, const LLUUID& source_task_id)
+{
+    if (!object || source_task_id.isNull())
+    {
+        return false;
+    }
+
+    LLViewerRegion* first_region = object->getRegion();
+    if (!first_region)
+    {
+        return false;
+    }
+
+    std::vector<LLViewerObjectPtr> objects;
+    objects.push_back(object);
+
+    std::string error;
+    derez_objects(DRD_SAVE_INTO_TASK_INVENTORY, source_task_id, first_region, error, &objects);
+    if (!error.empty())
+    {
+        return false;
+    }
+    return true;
+}
+
 static void derez_objects_separate(EDeRezDestination dest, const LLUUID &dest_id)
 {
     std::vector<LLViewerObjectPtr> derez_object_list;
@@ -5050,6 +5195,27 @@ void handle_link_objects()
     else
     {
         LLSelectMgr::getInstance()->linkObjects();
+    }
+}
+
+void handle_unlink_objects()
+{
+    if (LLSelectMgr::getInstance()->getSelection()->isEmpty())
+    {
+        LLPanel* visited_panel = LLFloaterSidePanelContainer::getPanel("places", "Teleport History");
+        if (visited_panel && visited_panel->isInVisibleChain())
+        {
+            LLFloaterReg::hideInstance("places");
+        }
+        else
+        {
+            LLFloaterReg::toggleInstanceOrBringToFront("places");
+            LLFloaterSidePanelContainer::showPanel("places", LLSD().with("type", "open_teleport_history_tab"));
+        }
+    }
+    else
+    {
+        LLSelectMgr::getInstance()->unlinkObjects();
     }
 }
 
@@ -5580,10 +5746,13 @@ class LLToolsSaveToObjectInventory : public view_listener_t
     bool handleEvent(const LLSD& userdata)
     {
         LLSelectNode* node = LLSelectMgr::getInstance()->getSelection()->getFirstRootNode();
-        if(node && (node->mValid) && (!node->mFromTaskID.isNull()))
+        if (node && node->mValid && !node->mFromTaskID.isNull())
         {
-            // *TODO: check to see if the fromtaskid object exists.
-            derez_objects(DRD_SAVE_INTO_TASK_INVENTORY, node->mFromTaskID);
+            LLViewerObject* object = node->getObject();
+            if (object)
+            {
+                save_object_back_to_contents(object, node->mFromTaskID);
+            }
         }
         return true;
     }
@@ -5631,6 +5800,84 @@ class LLToolsEnablePathfindingRebakeRegion : public view_listener_t
             returnValue = LLNavigationBar::getInstance()->isRebakeNavMeshAvailable();
         }
         return returnValue;
+    }
+};
+
+class LLToolsCheckSelectionLODMode : public view_listener_t
+{
+    bool handleEvent(const LLSD& userdata)
+    {
+        std::string param = userdata.asString();
+        static LLCachedControl<S32> debug_selection_lods(gSavedSettings, "DebugSelectionLODs", 0);
+        if ("default" == param)
+        {
+            return debug_selection_lods() < 0;
+        }
+        else if ("high" == param)
+        {
+            return debug_selection_lods() == 3;
+        }
+        else if ("medium" == param)
+        {
+            return debug_selection_lods() == 2;
+        }
+        else if ("low" == param)
+        {
+            return debug_selection_lods() == 1;
+        }
+        else if ("lowest" == param)
+        {
+            return debug_selection_lods() == 0;
+        }
+
+        return false;
+    }
+};
+
+
+class LLToolsCheckScriptEditorServer : public view_listener_t
+{
+    bool handleEvent(const LLSD& userdata)
+    {
+        LLScriptEditorWSServer::ptr_t server = LLScriptEditorWSServer::getServer();
+        return server && server->isRunning();
+    }
+};
+
+class LLToolsEnableScriptEditorServer : public view_listener_t
+{
+    bool handleEvent(const LLSD& userdata)
+    {
+        return LLScriptEditorWSServer::isEnabled();
+    }
+};
+
+class LLToolsToggleScriptEditorServer : public view_listener_t
+{
+    bool handleEvent(const LLSD& userdata)
+    {
+        LLScriptEditorWSServer::ptr_t server = LLScriptEditorWSServer::getServer();
+        if (server && server->isRunning())
+        {
+            LLWebsocketMgr::instance().stopServer(LLScriptEditorWSServer::DEFAULT_SERVER_NAME);
+        }
+        else
+        {
+            if (LLScriptEditorWSServer::isTightIntegration())
+            {
+                LLScriptEditorWSServer::launchVSCode();
+            }
+            else
+            {
+                LLScriptEditorWSServer::ensureServerRunning();
+            }
+        }
+
+        if (gFloaterTools)
+        {
+            gFloaterTools->dirty();
+        }
+        return true;
     }
 };
 
@@ -6475,13 +6722,13 @@ void handle_look_at_selection(const LLSD& param)
     }
 }
 
-void handle_zoom_to_object(const LLUUID& object_id)
+bool handle_zoom_to_object(const LLUUID& object_id)
 {
     const F32 PADDING_FACTOR = 2.f;
 
     LLViewerObject* object = gObjectList.findObject(object_id);
 
-    if (object)
+    if (object && object->isReachable())
     {
         gAgentCamera.setFocusOnAvatar(false, ANIMATE);
 
@@ -6493,12 +6740,14 @@ void handle_zoom_to_object(const LLUUID& object_id)
         obj_to_cam.normVec();
 
 
-            LLVector3d object_center_global = gAgent.getPosGlobalFromAgent(bbox.getCenterAgent());
+        LLVector3d object_center_global = gAgent.getPosGlobalFromAgent(bbox.getCenterAgent());
 
-            gAgentCamera.setCameraPosAndFocusGlobal(object_center_global + LLVector3d(obj_to_cam * distance),
+        gAgentCamera.setCameraPosAndFocusGlobal(object_center_global + LLVector3d(obj_to_cam * distance),
                                             object_center_global,
                                             object_id );
+        return true;
     }
+    return false;
 }
 
 class LLAvatarInviteToGroup : public view_listener_t
@@ -6565,7 +6814,7 @@ class LLAvatarTogglePicks : public view_listener_t
             instance->setFocus(true);
             LLAvatarActions::showPicks(gAgent.getID());
         }
-        else if (picks_tab_visible())
+        else if (LLAvatarActions::myPicksTabVisible())
         {
             instance->closeFloater();
         }
@@ -6609,7 +6858,17 @@ class LLAvatarResetSkeleton : public view_listener_t
     {
         if (LLVOAvatar* avatar = find_avatar_from_object(LLSelectMgr::getInstance()->getSelection()->getPrimaryObject()))
         {
+            if(avatar->getID() == gAgentID)
+            {
+                LLHUDEffectResetSkeleton* effectp = (LLHUDEffectResetSkeleton*)LLHUDManager::getInstance()->createViewerEffect(LLHUDObject::LL_HUD_EFFECT_RESET_SKELETON, true);
+                effectp->setSourceObject(gAgentAvatarp);
+                effectp->setTargetObject((LLViewerObject*)avatar);
+                effectp->setResetAnimations(false);
+            }
+            else
+            {
             avatar->resetSkeleton(false);
+        }
         }
         return true;
     }
@@ -6619,11 +6878,8 @@ class LLAvatarEnableResetSkeleton : public view_listener_t
 {
     bool handleEvent(const LLSD& userdata)
     {
-        if (LLVOAvatar* avatar = find_avatar_from_object(LLSelectMgr::getInstance()->getSelection()->getPrimaryObject()))
-        {
-            return true;
-        }
-        return false;
+        LLViewerObject* obj = LLSelectMgr::getInstance()->getSelection()->getPrimaryObject();
+        return obj && obj->getAvatar();
     }
 };
 
@@ -6633,7 +6889,17 @@ class LLAvatarResetSkeletonAndAnimations : public view_listener_t
     {
         if (LLVOAvatar* avatar = find_avatar_from_object(LLSelectMgr::getInstance()->getSelection()->getPrimaryObject()))
         {
+            if(avatar->getID() == gAgentID)
+            {
+                LLHUDEffectResetSkeleton* effectp = (LLHUDEffectResetSkeleton*)LLHUDManager::getInstance()->createViewerEffect(LLHUDObject::LL_HUD_EFFECT_RESET_SKELETON, true);
+                effectp->setSourceObject(gAgentAvatarp);
+                effectp->setTargetObject((LLViewerObject*)avatar);
+                effectp->setResetAnimations(true);
+            }
+            else
+            {
             avatar->resetSkeleton(true);
+        }
         }
         return true;
     }
@@ -6661,11 +6927,24 @@ class LLAvatarResetSelfSkeletonAndAnimations : public view_listener_t
     {
         if (LLVOAvatar* avatar = find_avatar_from_object(LLSelectMgr::getInstance()->getSelection()->getPrimaryObject()))
         {
-            avatar->resetSkeleton(true);
+            if(avatar->getID() == gAgentID)
+            {
+                LLHUDEffectResetSkeleton* effectp = (LLHUDEffectResetSkeleton*)LLHUDManager::getInstance()->createViewerEffect(LLHUDObject::LL_HUD_EFFECT_RESET_SKELETON, true);
+                effectp->setSourceObject(gAgentAvatarp);
+                effectp->setTargetObject((LLViewerObject*)avatar);
+                effectp->setResetAnimations(true);
         }
         else
         {
-            gAgentAvatarp->resetSkeleton(true);
+                avatar->resetSkeleton(true);
+            }
+        }
+        else
+        {
+            LLHUDEffectResetSkeleton* effectp = (LLHUDEffectResetSkeleton*)LLHUDManager::getInstance()->createViewerEffect(LLHUDObject::LL_HUD_EFFECT_RESET_SKELETON, true);
+            effectp->setSourceObject(gAgentAvatarp);
+            effectp->setTargetObject(gAgentAvatarp);
+            effectp->setResetAnimations(true);
         }
         return true;
     }
@@ -7786,19 +8065,33 @@ class LLToolsSelectedScriptAction : public view_listener_t
     bool handleEvent(const LLSD& userdata)
     {
         std::string action = userdata.asString();
-        bool mono = false;
+        std::string target = "lsl2";
         std::string msg, name;
         std::string title;
         if (action == "compile mono")
         {
             name = "compile_queue";
-            mono = true;
+            target = "mono";
             msg = "Recompile";
             title = LLTrans::getString("CompileQueueTitle");
         }
         if (action == "compile lsl")
         {
             name = "compile_queue";
+            msg = "Recompile";
+            title = LLTrans::getString("CompileQueueTitle");
+        }
+        else if (action == "compile lua")
+        {
+            name = "compile_queue";
+            target = "luau";
+            msg = "Recompile";
+            title = LLTrans::getString("CompileQueueTitle");
+        }
+        else if (action == "compile lsl-luau")
+        {
+            name = "compile_queue";
+            target = "lsl-luau";
             msg = "Recompile";
             title = LLTrans::getString("CompileQueueTitle");
         }
@@ -7825,7 +8118,7 @@ class LLToolsSelectedScriptAction : public view_listener_t
         LLFloaterScriptQueue* queue =LLFloaterReg::getTypedInstance<LLFloaterScriptQueue>(name, LLSD(id));
         if (queue)
         {
-            queue->setMono(mono);
+            queue->setCompileTarget(target);
             if (queue_actions(queue, msg))
             {
                 queue->setTitle(title);
@@ -8224,6 +8517,27 @@ class LLEditableSelectedMono : public view_listener_t
     }
 };
 
+static bool is_lua_scripts_enabled()
+{
+    LLViewerRegion* region = gAgent.getRegion();
+    if (!region || region->getCapability("UpdateScriptTask").empty() || !region->simulatorFeaturesReceived())
+    {
+        return false;
+    }
+
+    LLSD simulator_features;
+    region->getSimulatorFeatures(simulator_features);
+    return simulator_features["LuaScriptsEnabled"].asBoolean();
+}
+
+class LLEditableSelectedLua : public view_listener_t
+{
+    bool handleEvent(const LLSD& userdata)
+    {
+        return is_editable_selected() && is_lua_scripts_enabled();
+    }
+};
+
 bool enable_object_take_copy()
 {
     bool all_valid = false;
@@ -8307,15 +8621,6 @@ class LLToolsEnableSaveToObjectInventory : public view_listener_t
     {
         bool new_value = enable_save_into_task_inventory();
         return new_value;
-    }
-};
-
-class LLToggleHowTo : public view_listener_t
-{
-    bool handleEvent(const LLSD& userdata)
-    {
-        LLFloaterReg::toggleInstanceOrBringToFront("guidebook");
-        return true;
     }
 };
 
@@ -8454,6 +8759,36 @@ class LLToolsSelectBySurrounding : public view_listener_t
         LLSelectMgr::sRectSelectInclusive = !LLSelectMgr::sRectSelectInclusive;
 
         gSavedSettings.setBOOL("RectangleSelectInclusive", LLSelectMgr::sRectSelectInclusive);
+        return true;
+    }
+};
+
+class LLToolsSelectionLODMode : public view_listener_t
+{
+    bool handleEvent(const LLSD& userdata)
+    {
+        std::string param = userdata.asString();
+        if ("default" == param)
+        {
+            gSavedSettings.setS32("DebugSelectionLODs", -1);
+        }
+        else if ("high" == param)
+        {
+            gSavedSettings.setS32("DebugSelectionLODs", 3);
+        }
+        else if ("medium" == param)
+        {
+            gSavedSettings.setS32("DebugSelectionLODs", 2);
+        }
+        else if ("low" == param)
+        {
+            gSavedSettings.setS32("DebugSelectionLODs", 1);
+        }
+        else if ("lowest" == param)
+        {
+            gSavedSettings.setS32("DebugSelectionLODs", 0);
+        }
+
         return true;
     }
 };
@@ -8615,6 +8950,12 @@ LLVOAvatar* find_avatar_from_object(LLViewerObject* object)
         }
         else if( !object->isAvatar() )
         {
+            // Check for animesh objects (animated objects with a control avatar)
+            LLVOAvatar* avatar = object->getAvatar();
+            if (avatar)
+            {
+                return avatar;
+            }
             object = NULL;
         }
     }
@@ -8694,6 +9035,11 @@ void force_error_work_queue_crash()
 void force_error_thread_crash()
 {
     LLAppViewer::instance()->forceErrorThreadCrash();
+}
+
+void force_exception_thread_crash()
+{
+    LLAppViewer::instance()->forceExceptionThreadCrash();
 }
 
 class LLToolsUseSelectionForGrid : public view_listener_t
@@ -8888,6 +9234,17 @@ class LLViewHighlightTransparent : public view_listener_t
     {
         LLDrawPoolAlpha::sShowDebugAlpha = !LLDrawPoolAlpha::sShowDebugAlpha;
 
+        // invisible objects skip building their render batches unless sShowDebugAlpha is true, so rebuild batches whenever toggling this flag
+        gPipeline.rebuildDrawInfo();
+        return true;
+    }
+};
+
+class LLViewHighlightTransparentProbe : public view_listener_t
+{
+    bool handleEvent(const LLSD& userdata)
+    {
+        gSavedSettings.setBOOL("RenderReflectionProbeShowTransparent", !gSavedSettings.getBOOL("RenderReflectionProbeShowTransparent"));
         // invisible objects skip building their render batches unless sShowDebugAlpha is true, so rebuild batches whenever toggling this flag
         gPipeline.rebuildDrawInfo();
         return true;
@@ -9380,17 +9737,6 @@ class LLWorldEnableEnvPreset : public view_listener_t
     }
 };
 
-
-/// Post-Process callbacks
-class LLWorldPostProcess : public view_listener_t
-{
-    bool handleEvent(const LLSD& userdata)
-    {
-        LLFloaterReg::showInstance("env_post_process");
-        return true;
-    }
-};
-
 class LLWorldCheckBanLines : public view_listener_t
 {
     bool handleEvent(const LLSD& userdata)
@@ -9413,6 +9759,16 @@ class LLWorldShowBanLines : public view_listener_t
 void handle_flush_name_caches()
 {
     if (gCacheName) gCacheName->clear();
+}
+
+bool is_master_audio_muted()
+{
+    return LLAppViewer::instance()->getMasterSystemAudioMute();
+}
+
+void toggle_master_audio()
+{
+    LLAppViewer::instance()->setMasterSystemAudioMute(!is_master_audio_muted());
 }
 
 class LLUploadCostCalculator : public view_listener_t
@@ -9536,6 +9892,23 @@ void show_topinfobar_context_menu(LLView* ctrl, S32 x, S32 y)
     LLMenuGL::showPopup(ctrl, show_topbarinfo_context_menu, x, y);
 }
 
+static void register_agent_ui_callbacks()
+{
+    // These functions are used by menu and commands, they need to persist for the lifetime of the application
+    // Note: executes before LLToolBar::createButton and before menu builds
+    LLUICtrl::EnableCallbackRegistry::Registrar& global_enable = LLUICtrl::EnableCallbackRegistry::defaultRegistrar();
+    LLUICtrl::CommitCallbackRegistry::Registrar& global_commit = LLUICtrl::CommitCallbackRegistry::defaultRegistrar();
+    global_commit.add("Agent.toggleFlying", boost::bind(&LLAgent::toggleFlying));
+    global_enable.add("Agent.enableFlyLand", boost::bind(&enable_fly_land));
+    global_commit.add("Agent.PressMicrophone", boost::bind(&LLAgent::pressMicrophone, _2));
+    global_commit.add("Agent.ReleaseMicrophone", boost::bind(&LLAgent::releaseMicrophone, _2));
+    global_commit.add("Agent.ToggleMicrophone", boost::bind(&LLAgent::toggleMicrophone, _2));
+    global_enable.add("Agent.IsMicrophoneOn", boost::bind(&LLAgent::isMicrophoneOn, _2));
+    global_enable.add("Agent.IsActionAllowed", boost::bind(&LLAgent::isActionAllowed, _2));
+    global_enable.add("Avatar.IsMyProfileOpen", boost::bind(&LLAvatarActions::myProfileVisible));
+    global_enable.add("Avatar.IsPicksTabOpen", boost::bind(&LLAvatarActions::myPicksTabVisible));
+}
+
 void initialize_edit_menu()
 {
     view_listener_t::addMenu(new LLEditUndo(), "Edit.Undo");
@@ -9573,6 +9946,8 @@ void initialize_spellcheck_menu()
 
 void initialize_menus()
 {
+    LL_PROFILE_ZONE_SCOPED;
+
     // A parameterized event handler used as ctrl-8/9/0 zoom controls below.
     class LLZoomer : public view_listener_t
     {
@@ -9591,6 +9966,8 @@ void initialize_menus()
         bool mMult;
     };
 
+    register_agent_ui_callbacks();
+
     LLUICtrl::EnableCallbackRegistry::Registrar& enable = LLUICtrl::EnableCallbackRegistry::currentRegistrar();
     LLUICtrl::CommitCallbackRegistry::Registrar& commit = LLUICtrl::CommitCallbackRegistry::currentRegistrar();
 
@@ -9605,15 +9982,6 @@ void initialize_menus()
     view_listener_t::addEnable(new LLUpdateMembershipLabel(), "Membership.UpdateLabel");
 
     enable.add("Conversation.IsConversationLoggingAllowed", boost::bind(&LLFloaterIMContainer::isConversationLoggingAllowed));
-
-    // Agent
-    commit.add("Agent.toggleFlying", boost::bind(&LLAgent::toggleFlying));
-    enable.add("Agent.enableFlyLand", boost::bind(&enable_fly_land));
-    commit.add("Agent.PressMicrophone", boost::bind(&LLAgent::pressMicrophone, _2));
-    commit.add("Agent.ReleaseMicrophone", boost::bind(&LLAgent::releaseMicrophone, _2));
-    commit.add("Agent.ToggleMicrophone", boost::bind(&LLAgent::toggleMicrophone, _2));
-    enable.add("Agent.IsMicrophoneOn", boost::bind(&LLAgent::isMicrophoneOn, _2));
-    enable.add("Agent.IsActionAllowed", boost::bind(&LLAgent::isActionAllowed, _2));
 
     // File menu
     init_menu_file();
@@ -9637,6 +10005,7 @@ void initialize_menus()
     view_listener_t::addMenu(new LLViewLookAtLastChatter(), "View.LookAtLastChatter");
     view_listener_t::addMenu(new LLViewShowHoverTips(), "View.ShowHoverTips");
     view_listener_t::addMenu(new LLViewHighlightTransparent(), "View.HighlightTransparent");
+    view_listener_t::addMenu(new LLViewHighlightTransparentProbe(), "View.HighlightTransparentProbe");
     view_listener_t::addMenu(new LLViewToggleRenderType(), "View.ToggleRenderType");
     view_listener_t::addMenu(new LLViewShowHUDAttachments(), "View.ShowHUDAttachments");
     view_listener_t::addMenu(new LLZoomer(1.2f), "View.ZoomOut");
@@ -9681,9 +10050,10 @@ void initialize_menus()
     view_listener_t::addMenu(new LLWorldEnableEnvSettings(), "World.EnableEnvSettings");
     view_listener_t::addMenu(new LLWorldEnvPreset(), "World.EnvPreset");
     view_listener_t::addMenu(new LLWorldEnableEnvPreset(), "World.EnableEnvPreset");
-    view_listener_t::addMenu(new LLWorldPostProcess(), "World.PostProcess");
     view_listener_t::addMenu(new LLWorldCheckBanLines() , "World.CheckBanLines");
     view_listener_t::addMenu(new LLWorldShowBanLines() , "World.ShowBanLines");
+    commit.add("World.ToggleMasterAudio", boost::bind(&toggle_master_audio));
+    enable.add("World.IsMasterAudioMuted", boost::bind(&is_master_audio_muted));
 
     // Tools menu
     view_listener_t::addMenu(new LLToolsSelectTool(), "Tools.SelectTool");
@@ -9692,6 +10062,7 @@ void initialize_menus()
     view_listener_t::addMenu(new LLToolsSelectInvisibleObjects(), "Tools.SelectInvisibleObjects");
     view_listener_t::addMenu(new LLToolsSelectReflectionProbes(), "Tools.SelectReflectionProbes");
     view_listener_t::addMenu(new LLToolsSelectBySurrounding(), "Tools.SelectBySurrounding");
+    view_listener_t::addMenu(new LLToolsSelectionLODMode(), "Tools.SelectionLODMode");
     view_listener_t::addMenu(new LLToolsShowHiddenSelection(), "Tools.ShowHiddenSelection");
     view_listener_t::addMenu(new LLToolsShowSelectionLightRadius(), "Tools.ShowSelectionLightRadius");
     view_listener_t::addMenu(new LLToolsEditLinkedParts(), "Tools.EditLinkedParts");
@@ -9699,7 +10070,7 @@ void initialize_menus()
     view_listener_t::addMenu(new LLToolsUseSelectionForGrid(), "Tools.UseSelectionForGrid");
     view_listener_t::addMenu(new LLToolsSelectNextPartFace(), "Tools.SelectNextPart");
     commit.add("Tools.Link", boost::bind(&handle_link_objects));
-    commit.add("Tools.Unlink", boost::bind(&LLSelectMgr::unlinkObjects, LLSelectMgr::getInstance()));
+    commit.add("Tools.Unlink", boost::bind(&handle_unlink_objects));
     view_listener_t::addMenu(new LLToolsStopAllAnimations(), "Tools.StopAllAnimations");
     view_listener_t::addMenu(new LLToolsReleaseKeys(), "Tools.ReleaseKeys");
     view_listener_t::addMenu(new LLToolsEnableReleaseKeys(), "Tools.EnableReleaseKeys");
@@ -9724,11 +10095,11 @@ void initialize_menus()
     view_listener_t::addMenu(new LLToolsEnablePathfindingView(), "Tools.EnablePathfindingView");
     view_listener_t::addMenu(new LLToolsDoPathfindingRebakeRegion(), "Tools.DoPathfindingRebakeRegion");
     view_listener_t::addMenu(new LLToolsEnablePathfindingRebakeRegion(), "Tools.EnablePathfindingRebakeRegion");
+    view_listener_t::addMenu(new LLToolsCheckSelectionLODMode(), "Tools.ToolsCheckSelectionLODMode");
 
-    // Help menu
-    // most items use the ShowFloater method
-    view_listener_t::addMenu(new LLToggleHowTo(), "Help.ToggleHowTo");
-
+    view_listener_t::addMenu(new LLToolsCheckScriptEditorServer(), "Tools.CheckScriptEditorServer");
+    view_listener_t::addMenu(new LLToolsEnableScriptEditorServer(), "Tools.EnableScriptEditorServer");
+    view_listener_t::addMenu(new LLToolsToggleScriptEditorServer(), "Tools.ToggleScriptEditorServer");
     // Advanced menu
     view_listener_t::addMenu(new LLAdvancedToggleConsole(), "Advanced.ToggleConsole");
     view_listener_t::addMenu(new LLAdvancedCheckConsole(), "Advanced.CheckConsole");
@@ -9898,6 +10269,7 @@ void initialize_menus()
     view_listener_t::addMenu(new LLAdvancedForceErrorCoroprocedureCrash(), "Advanced.ForceErrorCoroprocedureCrash");
     view_listener_t::addMenu(new LLAdvancedForceErrorWorkQueueCrash(), "Advanced.ForceErrorWorkQueueCrash");
     view_listener_t::addMenu(new LLAdvancedForceErrorThreadCrash(), "Advanced.ForceErrorThreadCrash");
+    view_listener_t::addMenu(new LLAdvancedForceExceptionThreadCrash(), "Advanced.ForceExceptionThreadCrash");
     view_listener_t::addMenu(new LLAdvancedForceErrorDisconnectViewer(), "Advanced.ForceErrorDisconnectViewer");
 
     // Advanced (toplevel)
@@ -9978,8 +10350,6 @@ void initialize_menus()
     view_listener_t::addMenu(new LLAvatarResetSkeletonAndAnimations(), "Avatar.ResetSkeletonAndAnimations");
     view_listener_t::addMenu(new LLAvatarResetSelfSkeleton(), "Avatar.ResetSelfSkeleton");
     view_listener_t::addMenu(new LLAvatarResetSelfSkeletonAndAnimations(), "Avatar.ResetSelfSkeletonAndAnimations");
-    enable.add("Avatar.IsMyProfileOpen", boost::bind(&my_profile_visible));
-    enable.add("Avatar.IsPicksTabOpen", boost::bind(&picks_tab_visible));
 
     commit.add("Avatar.OpenMarketplace", boost::bind(&LLWeb::loadURLExternal, gSavedSettings.getString("MarketplaceURL")));
 
@@ -9990,6 +10360,7 @@ void initialize_menus()
     view_listener_t::addMenu(new LLObjectBuild(), "Object.Build");
     commit.add("Object.Touch", boost::bind(&handle_object_touch));
     commit.add("Object.ShowOriginal", boost::bind(&handle_object_show_original));
+    commit.add("Object.SetFavorite", boost::bind(&handle_object_set_favorite, _2));
     commit.add("Object.SitOrStand", boost::bind(&handle_object_sit_or_stand));
     commit.add("Object.Delete", boost::bind(&handle_object_delete));
     view_listener_t::addMenu(new LLObjectAttachToAvatar(true), "Object.AttachToAvatar");
@@ -10018,6 +10389,7 @@ void initialize_menus()
     enable.add("Object.EnableEditGLTFMaterial", boost::bind(&enable_object_edit_gltf_material));
     enable.add("Object.EnableOpen", boost::bind(&enable_object_open));
     enable.add("Object.EnableTouch", boost::bind(&enable_object_touch, _1));
+    enable.add("Object.EnableFavorites", boost::bind(&enable_object_favorite, _2));
     enable.add("Object.EnableDelete", boost::bind(&enable_object_delete));
     enable.add("Object.EnableWear", boost::bind(&object_is_wearable));
 
@@ -10096,5 +10468,6 @@ void initialize_menus()
     view_listener_t::addMenu(new LLSomethingSelectedNoHUD(), "SomethingSelectedNoHUD");
     view_listener_t::addMenu(new LLEditableSelected(), "EditableSelected");
     view_listener_t::addMenu(new LLEditableSelectedMono(), "EditableSelectedMono");
+    view_listener_t::addMenu(new LLEditableSelectedLua(), "EditableSelectedLua");
     view_listener_t::addMenu(new LLToggleUIHints(), "ToggleUIHints");
 }

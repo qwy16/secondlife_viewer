@@ -55,7 +55,6 @@
 #include "llmemory.h"
 #include "llparcel.h"
 #include "llperfstats.h"
-#include "llpostprocess.h"
 #include "llrender.h"
 #include "llscenemonitor.h"
 #include "llsdjson.h"
@@ -217,9 +216,10 @@ void display_update_camera()
     {
         final_far *= 0.5f;
     }
-    else if (LLViewerTexture::sDesiredDiscardBias > 2.f)
+    // When system memory is critically low or recovering, shrink draw distance.
+    else if (const F32 mem_factor = LLMemory::getSystemMemoryBudgetFactor(); mem_factor > 1.f)
     {
-        final_far = llmax(32.f, final_far / (LLViewerTexture::sDesiredDiscardBias - 1.f));
+        final_far = llmax(32.f, final_far / mem_factor);
     }
     LLViewerCamera::getInstance()->setFar(final_far);
     LLVOAvatar::sRenderDistance = llclamp(final_far, 16.f, 256.f);
@@ -240,8 +240,11 @@ void display_stats()
     if (gRecentFPSTime.getElapsedTimeF32() >= FPS_LOG_FREQUENCY)
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("DS - FPS");
+        LLTrace::Recording& recording = LLTrace::get_frame_recording().getLastRecording();
+        F64 normalized_session_jitter = recording.getLastValue(LLStatViewer::NOTRMALIZED_FRAMETIME_JITTER_SESSION);
+        F64 normalized_period_jitter = recording.getLastValue(LLStatViewer::NORMALIZED_FRAMTIME_JITTER_PERIOD);
         F32 fps = gRecentFrameCount / FPS_LOG_FREQUENCY;
-        LL_INFOS() << llformat("FPS: %.02f", fps) << LL_ENDL;
+        LL_INFOS() << llformat("FPS: %.02f SESSION JITTER: %.4f PERIOD JITTER: %.4f", fps, normalized_session_jitter, normalized_period_jitter) << LL_ENDL;
         gRecentFrameCount = 0;
         gRecentFPSTime.reset();
     }
@@ -410,6 +413,7 @@ static void update_tp_display(bool minimized)
 void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
 {
     LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("Render");
+    LL_PROFILE_GPU_ZONE("Render");
 
     LLPerfStats::RecordSceneTime T (LLPerfStats::StatType_t::RENDER_DISPLAY); // render time capture - This is the main stat for overall rendering.
 
@@ -572,9 +576,9 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
     LLImageGL::updateStats(gFrameTimeSeconds);
 
     static LLCachedControl<S32> avatar_name_tag_mode(gSavedSettings, "AvatarNameTagMode", 1);
-    static LLCachedControl<bool> name_tag_show_group_titles(gSavedSettings, "NameTagShowGroupTitles", true);
+    static LLCachedControl<S32> name_tag_show_group_titles(gSavedSettings, "GroupTitlesTagMode", 2 /*all group tags*/);
     LLVOAvatar::sRenderName = avatar_name_tag_mode;
-    LLVOAvatar::sRenderGroupTitles = name_tag_show_group_titles && avatar_name_tag_mode > 0;
+    LLVOAvatar::sRenderGroupTitles = avatar_name_tag_mode > 0 ? name_tag_show_group_titles : 0;
 
     gPipeline.mBackfaceCull = true;
     gFrameCount++;
@@ -714,6 +718,7 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
         if (gPipeline.RenderMirrors && !gSnapshot)
         {
             LL_PROFILE_ZONE_NAMED_CATEGORY_DISPLAY("Update hero probes");
+            LL_PROFILE_GPU_ZONE("hero manager")
             gPipeline.mHeroProbeManager.update();
             gPipeline.mHeroProbeManager.renderProbes();
         }
@@ -1069,7 +1074,7 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
         LLGLSLShader::finishProfile(stats);
 
         auto report_name = getProfileStatsFilename();
-        std::ofstream outf(report_name);
+        llofstream outf(report_name);
         if (! outf)
         {
             LL_WARNS() << "Couldn't write to " << std::quoted(report_name) << LL_ENDL;
@@ -1135,15 +1140,12 @@ std::string getProfileStatsFilename()
     // same second), may produce (e.g.) sec==61, but avoids collisions and
     // preserves chronological filename sort order.
     std::string name;
-    std::error_code ec;
     do
     {
         // base + missing 2-digit seconds, append ".json"
         // post-increment sec in case we have to try again
         name = stringize(base, std::setw(2), std::setfill('0'), sec++, ".json");
-    } while (std::filesystem::exists(fsyspath(name), ec));
-    // Ignoring ec means we might potentially return a name that does already
-    // exist -- but if we can't check its existence, what more can we do?
+    } while (LLFile::exists(name));
     return name;
 }
 
@@ -1522,6 +1524,11 @@ void render_ui(F32 zoom_factor, int subfield)
                 render_disconnected_background();
             }
         }
+        else
+        {
+            // Make sure particle effects disappear
+            LLHUDObject::renderAllForTimer();
+        }
 
         if (render_ui)
         {
@@ -1771,13 +1778,15 @@ void render_ui_2d()
         S32 width = gViewerWindow->getWindowWidthScaled();
         S32 height = gViewerWindow->getWindowHeightScaled();
         gGL.getTexUnit(0)->bind(&gPipeline.mUIScreen);
+        gUIProgram.bind();
         gGL.begin(LLRender::TRIANGLE_STRIP);
         gGL.color4f(1.f,1.f,1.f,1.f);
-        gGL.texCoord2f(0.f, 0.f);                 gGL.vertex2i(0, 0);
-        gGL.texCoord2f((F32)width, 0.f);          gGL.vertex2i(width, 0);
-        gGL.texCoord2f(0.f, (F32)height);         gGL.vertex2i(0, height);
-        gGL.texCoord2f((F32)width, (F32)height);  gGL.vertex2i(width, height);
+        gGL.texCoord2f(0.f, 0.f);         gGL.vertex2i(0, 0);
+        gGL.texCoord2f(1.f, 0.f);         gGL.vertex2i(width, 0);
+        gGL.texCoord2f(0.f, 1.f);         gGL.vertex2i(0, height);
+        gGL.texCoord2f(1.f, 1.f);         gGL.vertex2i(width, height);
         gGL.end();
+        gUIProgram.unbind();
     }
     else
     {

@@ -65,7 +65,6 @@
 
 // for XUIParse
 #include "llquaternion.h"
-#include <boost/tokenizer.hpp>
 #include <boost/algorithm/string/find_iterator.hpp>
 #include <boost/algorithm/string/finder.hpp>
 
@@ -157,6 +156,7 @@ mWindow(NULL), // set later in startup
 mRootView(NULL),
 mHelpImpl(NULL)
 {
+    LL_PROFILE_ZONE_SCOPED;
     LLRender2D::createInstance(image_provider);
     LLSpellChecker::createInstance();
 
@@ -213,13 +213,8 @@ void LLUI::setPopupFuncs(const add_popup_t& add_popup, const remove_popup_t& rem
 
 void LLUI::setMousePositionScreen(S32 x, S32 y)
 {
-#if defined(LL_DARWIN)
-    S32 screen_x = ll_round(((F32)x * getScaleFactor().mV[VX]) / LLView::getWindow()->getSystemUISize());
-    S32 screen_y = ll_round(((F32)y * getScaleFactor().mV[VY]) / LLView::getWindow()->getSystemUISize());
-#else
     S32 screen_x = ll_round((F32)x * getScaleFactor().mV[VX]);
     S32 screen_y = ll_round((F32)y * getScaleFactor().mV[VY]);
-#endif
 
     LLView::getWindow()->setCursorPosition(LLCoordGL(screen_x, screen_y).convert());
 }

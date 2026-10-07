@@ -122,9 +122,8 @@ public:
         FetchItemHttpHandler(const LLSD & request_sd);
         virtual ~FetchItemHttpHandler();
 
-    protected:
-        FetchItemHttpHandler(const FetchItemHttpHandler &);             // Not defined
-        void operator=(const FetchItemHttpHandler &);                   // Not defined
+        FetchItemHttpHandler(const FetchItemHttpHandler&) = delete;
+        FetchItemHttpHandler& operator=(const FetchItemHttpHandler&) = delete;
 
     public:
         virtual void onCompleted(LLCore::HttpHandle handle, LLCore::HttpResponse * response);
@@ -159,8 +158,12 @@ protected:
 public:
     // The inventory model usage is sensitive to the initial construction of the model
     bool isInventoryUsable() const;
+    F32 getLibrarySkeletonLoadTime() const { return mLibrarySkeletonLoadTime; }
+    F32 getAgentSkeletonLoadTime() const { return mAgentSkeletonLoadTime; }
 private:
     bool mIsAgentInvUsable; // used to handle an invalid inventory state
+    F32 mLibrarySkeletonLoadTime;
+    F32 mAgentSkeletonLoadTime;
 
     // One-time initialization of HTTP system.
     void initHttpRequest();
@@ -196,19 +199,22 @@ public:
 
     // Call on logout to save a terse representation.
     void cache(const LLUUID& parent_folder_id, const LLUUID& agent_id);
+
+    // Wait for any pending async cache operations to complete
+    static void waitForPendingCacheWrites();
 private:
     // Information for tracking the actual inventory. We index this
     // information in a lot of different ways so we can access
     // the inventory using several different identifiers.
     // mInventory member data is the 'master' list of inventory, and
     // mCategoryMap and mItemMap store uuid->object mappings.
-    typedef std::map<LLUUID, LLPointer<LLViewerInventoryCategory> > cat_map_t;
-    typedef std::map<LLUUID, LLPointer<LLViewerInventoryItem> > item_map_t;
+    typedef std::unordered_map<LLUUID, LLPointer<LLViewerInventoryCategory> > cat_map_t;
+    typedef std::unordered_map<LLUUID, LLPointer<LLViewerInventoryItem>>     item_map_t;
     cat_map_t mCategoryMap;
     item_map_t mItemMap;
     // This last set of indices is used to map parents to children.
-    typedef std::map<LLUUID, cat_array_t*> parent_cat_map_t;
-    typedef std::map<LLUUID, item_array_t*> parent_item_map_t;
+    typedef std::unordered_map<LLUUID, cat_array_t*> parent_cat_map_t;
+    typedef std::unordered_map<LLUUID, item_array_t*> parent_item_map_t;
     parent_cat_map_t mParentChildCategoryTree;
     parent_item_map_t mParentChildItemTree;
 
@@ -330,6 +336,8 @@ public:
     // user specified one or it does not exist, creates default category if it is missing.
     const LLUUID findUserDefinedCategoryUUIDForType(LLFolderType::EType preferred_type) const;
 
+    const LLUUID getMarketplaceListingsUUID();
+
     // Get whatever special folder this object is a child of, if any.
     const LLViewerInventoryCategory *getFirstNondefaultParent(const LLUUID& obj_id) const;
 
@@ -361,6 +369,8 @@ public:
 
 private:
     mutable LLPointer<LLViewerInventoryItem> mLastItem; // cache recent lookups
+
+    LLUUID mMarketplaceListingsUUID;
 
     //--------------------------------------------------------------------
     // Count
@@ -489,7 +499,7 @@ public:
     void createNewCategory(const LLUUID& parent_id,
                              LLFolderType::EType preferred_type,
                              const std::string& name,
-                             inventory_func_type callback = NULL,
+                             inventory_func_type callback = nullptr,
                              const LLUUID& thumbnail_id = LLUUID::null);
 protected:
     // Internal methods that add inventory and make sure that all of

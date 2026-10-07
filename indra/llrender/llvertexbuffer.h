@@ -98,16 +98,8 @@ public:
         U32 mEnd;
     };
 
-    LLVertexBuffer(const LLVertexBuffer& rhs)
-    {
-        *this = rhs;
-    }
-
-    const LLVertexBuffer& operator=(const LLVertexBuffer& rhs)
-    {
-        LL_ERRS() << "Illegal operation!" << LL_ENDL;
-        return *this;
-    }
+    LLVertexBuffer(const LLVertexBuffer& rhs) = delete;
+    const LLVertexBuffer& operator=(const LLVertexBuffer& rhs) = delete;
 
     static void initClass(LLWindow* window);
     static void cleanupClass();
@@ -279,7 +271,7 @@ public:
     //for debugging, validate data in given range is valid
     bool validateRange(U32 start, U32 end, U32 count, U32 offset) const;
 
-    #ifdef LL_PROFILER_ENABLE_RENDER_DOC
+    #if LL_PROFILER_ENABLE_RENDER_DOC
     void setLabel(const char* label);
     #endif
 
@@ -340,7 +332,7 @@ public:
     static U32 sVertexCount;
 };
 
-#ifdef LL_PROFILER_ENABLE_RENDER_DOC
+#if LL_PROFILER_ENABLE_RENDER_DOC
 #define LL_LABEL_VERTEX_BUFFER(buf, name) buf->setLabel(name)
 #else
 #define LL_LABEL_VERTEX_BUFFER(buf, name)

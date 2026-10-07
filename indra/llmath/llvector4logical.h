@@ -39,7 +39,7 @@
 // contact someone with SSE experience (Falcon, Richard, Davep, e.g.)
 ////////////////////////////
 
-static LL_ALIGN_16(const U32 S_V4LOGICAL_MASK_TABLE[4*4]) =
+alignas(16) static const U32 S_V4LOGICAL_MASK_TABLE[4*4] =
 {
     0xFFFFFFFF, 0x00000000, 0x00000000, 0x00000000,
     0x00000000, 0xFFFFFFFF, 0x00000000, 0x00000000,
@@ -61,7 +61,7 @@ public:
     };
 
     // Empty default ctor
-    LLVector4Logical() {}
+    LLVector4Logical() = default;
 
     LLVector4Logical( const LLQuad& quad )
     {
@@ -77,7 +77,7 @@ public:
     // Invert this mask
     inline LLVector4Logical& invert()
     {
-        static const LL_ALIGN_16(U32 allOnes[4]) = { 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF };
+        alignas(16) static const U32 allOnes[4] = { 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF };
         ll_assert_aligned(allOnes,16);
         mQ = _mm_andnot_ps( mQ, *(LLQuad*)(allOnes) );
         return *this;
@@ -120,7 +120,9 @@ public:
 
 private:
 
-    LLQuad mQ{};
+    LLQuad mQ;
 };
+
+static_assert(std::is_trivial<LLVector4Logical>::value, "LLVector4Logical must be a standard layout type");
 
 #endif //LL_VECTOR4ALOGICAL_H

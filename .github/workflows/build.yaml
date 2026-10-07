@@ -1,6 +1,15 @@
 name: Build
 
 on:
+  workflow_dispatch:
+    inputs:
+      installer_type:
+        description: 'Windows installer type'
+        type: choice
+        options:
+          - velopack
+          - nsis
+        default: 'velopack'
   pull_request:
   push:
     branches: ["main", "release/*", "project/*"]
@@ -42,8 +51,9 @@ jobs:
     needs: setup
     strategy:
       matrix:
-        runner: ${{ fromJson((github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/Second_Life')) && '["windows-large","macos-15-xlarge"]' || '["windows-latest","macos-15"]') }}
+        runner: ${{ fromJson((github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/Second_Life')) && '["windows-large","macos-15-xlarge","linux-large"]' || '["windows-2022","macos-15-xlarge","ubuntu-22.04"]') }}
         configuration: ${{ fromJson(needs.setup.outputs.configurations) }}
+        build_variant: [Viewer, Tests]
     runs-on: ${{ matrix.runner }}
     outputs:
       viewer_channel: ${{ steps.build.outputs.viewer_channel }}
@@ -52,6 +62,20 @@ jobs:
       relnotes:       ${{ steps.which-branch.outputs.relnotes }}
       imagename:      ${{ steps.build.outputs.imagename }}
       configuration:  ${{ matrix.configuration }}
+      # Windows Velopack outputs (passed to sign-pkg-windows)
+      velopack_pack_id:       ${{ steps.build.outputs.velopack_pack_id }}
+      velopack_pack_version:  ${{ steps.build.outputs.velopack_pack_version }}
+      velopack_pack_title:    ${{ steps.build.outputs.velopack_pack_title }}
+      velopack_main_exe:      ${{ steps.build.outputs.velopack_main_exe }}
+      velopack_exclude:       ${{ steps.build.outputs.velopack_exclude }}
+      velopack_icon:          ${{ steps.build.outputs.velopack_icon }}
+      velopack_installer_base: ${{ steps.build.outputs.velopack_installer_base }}
+      # macOS Velopack outputs (passed to sign-pkg-mac)
+      velopack_mac_pack_id:      ${{ steps.build.outputs.velopack_mac_pack_id }}
+      velopack_mac_pack_version: ${{ steps.build.outputs.velopack_mac_pack_version }}
+      velopack_mac_pack_title:   ${{ steps.build.outputs.velopack_mac_pack_title }}
+      velopack_mac_main_exe:     ${{ steps.build.outputs.velopack_mac_main_exe }}
+      velopack_mac_bundle_id:    ${{ steps.build.outputs.velopack_mac_bundle_id }}
     env:
       AUTOBUILD_ADDRSIZE: 64
       AUTOBUILD_BUILD_ID: ${{ github.run_id }}
@@ -64,12 +88,12 @@ jobs:
       # autobuild-package.xml.
       AUTOBUILD_VCS_INFO: "true"
       AUTOBUILD_VSVER: "170"
-      DEVELOPER_DIR: "/Applications/Xcode_16.1.app/Contents/Developer"
+      DEVELOPER_DIR: "/Applications/Xcode_26.3.app/Contents/Developer"
       # Ensure that Linden viewer builds engage Bugsplat.
       BUGSPLAT_DB: ${{ needs.setup.outputs.bugsplat_db }}
-      build_coverity: false
       build_log_dir: ${{ github.workspace }}/.logs
-      build_viewer: true
+      build_viewer: ${{ matrix.build_variant == 'Viewer' }}
+      build_tests: ${{ matrix.build_variant == 'Tests' }}
       BUILDSCRIPTS_SHARED: ${{ github.workspace }}/.shared
       # extracted and committed to viewer repo
       BUILDSCRIPTS_SUPPORT_FUNCTIONS: ${{ github.workspace }}/buildscripts_support_functions
@@ -83,26 +107,41 @@ jobs:
       # Only set variants to the one configuration: don't let build.sh loop
       # over variants, let GitHub distribute variants over multiple hosts.
       variants: ${{ matrix.configuration }}
+      # Pass USE_VELOPACK to CMake when using Velopack installer (default) - Windows and macOS
+      autobuild_configure_parameters: ${{ (contains(matrix.runner, 'windows') || contains(matrix.runner, 'macos')) && (github.event.inputs.installer_type || 'velopack') == 'velopack' && '-- -DUSE_VELOPACK:BOOL=ON' || '' }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
+      - name: Linux Disk Cleanup
+        if: matrix.build_variant == 'Viewer' && runner.os == 'Linux'
+        run: |
+          # Prune various unused files from linux builder for Viewer build to fix runner disk space exhaustion
+          df -h
+          sudo docker container prune -f
+          sudo docker image prune -a -f
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/.ghcup
+          df -h
+
       - name: Setup python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
-
       - name: Checkout build variables
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: secondlife/build-variables
           ref: master
           path: .build-variables
 
       - name: Checkout master-message-template
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: secondlife/master-message-template
           path: .master-message-template
@@ -112,19 +151,46 @@ jobs:
 
       - name: Cache autobuild packages
         id: cache-installables
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .autobuild-installables
-          key: ${{ runner.os }}-64-${{ matrix.configuration }}-${{ hashFiles('autobuild.xml') }}
+          key: ${{ runner.os }}-64-${{ matrix.configuration }}-${{ matrix.build_variant }}-${{ hashFiles('autobuild.xml') }}
           restore-keys: |
+            ${{ runner.os }}-64-${{ matrix.configuration }}-${{ matrix.build_variant }}-
             ${{ runner.os }}-64-${{ matrix.configuration }}-
             ${{ runner.os }}-64-
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            libpulse-dev libunwind-dev \
+            libgl1-mesa-dev libglu1-mesa-dev libxinerama-dev \
+            libxcursor-dev libxfixes-dev libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev ninja-build libxft-dev \
+            libpipewire-0.3-dev libdbus-1-dev libvlc-dev \
+            libosmesa6-dev
+          sudo locale-gen en_US.UTF-8
+          sudo locale-gen en_GB.UTF-8
+          sudo locale-gen fr_FR.UTF-8
 
       - name: Determine source branch
         id: which-branch
         uses: secondlife/viewer-build-util/which-branch@v2
         with:
           token: ${{ github.token }}
+
+      - name: Setup .NET for Velopack
+        if: (runner.os == 'Windows' || runner.os == 'macOS') && (github.event.inputs.installer_type || 'velopack') == 'velopack'
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Install Velopack CLI
+        if: (runner.os == 'Windows' || runner.os == 'macOS') && (github.event.inputs.installer_type || 'velopack') == 'velopack'
+        shell: bash
+        run: dotnet tool install -g vpk
 
       - name: Build
         id: build
@@ -218,8 +284,10 @@ jobs:
               prefix=${ba[0]}
               if [ "$prefix" == "project" ]; then
                   IFS='_' read -ra prj <<< "${ba[1]}"
+                  prj_str="${prj[*]}"
                   # uppercase first letter of each word
-                  export viewer_channel="Second Life Project ${prj[*]^}"
+                  capitalized=$(echo "$prj_str" | awk '{for (i=1; i<=NF; i++) $i = toupper(substr($i,1,1)) substr($i,2); print}')
+                  export viewer_channel="Second Life Project $capitalized"
               elif  [[ "$prefix" == "release" || "$prefix" == "main" ]];
               then
                   export viewer_channel="Second Life Release"
@@ -262,8 +330,8 @@ jobs:
           echo "artifact=$RUNNER_OS$cfg_suffix" >> $GITHUB_OUTPUT
 
       - name: Upload executable
-        if: steps.build.outputs.viewer_app
-        uses: actions/upload-artifact@v4
+        if: matrix.build_variant == 'Viewer' && steps.build.outputs.viewer_app
+        uses: actions/upload-artifact@v7
         with:
           name: "${{ steps.build.outputs.artifact }}-app"
           path: |
@@ -272,14 +340,15 @@ jobs:
       # The other upload of nontrivial size is the symbol file. Use a distinct
       # artifact for that too.
       - name: Upload symbol file
-        if: steps.build.outputs.symbolfile
-        uses: actions/upload-artifact@v4
+        if: matrix.build_variant == 'Viewer' && steps.build.outputs.symbolfile
+        uses: actions/upload-artifact@v7
         with:
           name: "${{ steps.build.outputs.artifact }}-symbols"
           path: ${{ steps.build.outputs.symbolfile }}
 
       - name: Upload metadata
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
+        if: matrix.build_variant == 'Viewer'
         with:
           name: "${{ steps.build.outputs.artifact }}-metadata"
           # emitted by build.sh, possibly multiple lines
@@ -287,14 +356,24 @@ jobs:
             ${{ steps.build.outputs.metadata }}
 
       - name: Upload physics package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         # should only be set for viewer-private
-        if: matrix.configuration == 'Release' && steps.build.outputs.physicstpv
+        if: matrix.build_variant == 'Viewer' && matrix.configuration == 'Release' && steps.build.outputs.physicstpv
         with:
           name: "${{ steps.build.outputs.artifact }}-physics"
           # emitted by build.sh, zero or one lines
           path: |
             ${{ steps.build.outputs.physicstpv }}
+
+      - name: Upload appearance utility package
+        uses: actions/upload-artifact@v7
+        if: matrix.build_variant == 'Viewer' && steps.build.outputs.appearanceutility
+        with:
+          name: "${{ steps.build.outputs.artifact }}-appearanceutility"
+          # emitted by build.sh, zero or one lines
+          path: |
+            ${{ steps.build.outputs.appearanceutility }}
+
 
   sign-and-package-windows:
     env:
@@ -304,17 +383,25 @@ jobs:
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
       AZURE_TENANT_ID:     ${{ secrets.AZURE_TENANT_ID }}
     needs: build
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - name: Sign and package Windows viewer
         if: env.AZURE_KEY_VAULT_URI && env.AZURE_CERT_NAME && env.AZURE_CLIENT_ID && env.AZURE_CLIENT_SECRET && env.AZURE_TENANT_ID
-        uses: secondlife/viewer-build-util/sign-pkg-windows@v2
+        uses: secondlife/viewer-build-util/sign-pkg-windows@v2.1.0
         with:
           vault_uri: "${{ env.AZURE_KEY_VAULT_URI }}"
           cert_name: "${{ env.AZURE_CERT_NAME }}"
           client_id: "${{ env.AZURE_CLIENT_ID }}"
           client_secret: "${{ env.AZURE_CLIENT_SECRET }}"
           tenant_id: "${{ env.AZURE_TENANT_ID }}"
+          installer_type: "${{ github.event.inputs.installer_type || 'velopack' }}"
+          velopack_pack_id: "${{ needs.build.outputs.velopack_pack_id }}"
+          velopack_pack_version: "${{ needs.build.outputs.velopack_pack_version }}"
+          velopack_pack_title: "${{ needs.build.outputs.velopack_pack_title }}"
+          velopack_main_exe: "${{ needs.build.outputs.velopack_main_exe }}"
+          velopack_exclude: "${{ needs.build.outputs.velopack_exclude }}"
+          velopack_icon: "${{ needs.build.outputs.velopack_icon }}"
+          velopack_installer_base: "${{ needs.build.outputs.velopack_installer_base }}"
 
   sign-and-package-mac:
     env:
@@ -347,7 +434,7 @@ jobs:
 
       - name: Sign and package Mac viewer
         if: env.SIGNING_CERT_MACOS && env.SIGNING_CERT_MACOS_IDENTITY && env.SIGNING_CERT_MACOS_PASSWORD && steps.note-creds.outputs.note_user && steps.note-creds.outputs.note_pass && steps.note-creds.outputs.note_team
-        uses: secondlife/viewer-build-util/sign-pkg-mac@v2
+        uses: secondlife/viewer-build-util/sign-pkg-mac@v2.1.0
         with:
           channel: ${{ needs.build.outputs.viewer_channel }}
           imagename: ${{ needs.build.outputs.imagename }}
@@ -357,79 +444,114 @@ jobs:
           note_user: ${{ steps.note-creds.outputs.note_user }}
           note_pass: ${{ steps.note-creds.outputs.note_pass }}
           note_team: ${{ steps.note-creds.outputs.note_team }}
+          velopack_pack_id: "${{ needs.build.outputs.velopack_mac_pack_id }}"
+          velopack_pack_version: "${{ needs.build.outputs.velopack_mac_pack_version }}"
+          velopack_pack_title: "${{ needs.build.outputs.velopack_mac_pack_title }}"
+          velopack_main_exe: "${{ needs.build.outputs.velopack_mac_main_exe }}"
+          velopack_bundle_id: "${{ needs.build.outputs.velopack_mac_bundle_id }}"
 
   post-windows-symbols:
     env:
-      BUGSPLAT_USER: ${{ secrets.BUGSPLAT_USER }}
-      BUGSPLAT_PASS: ${{ secrets.BUGSPLAT_PASS }}
+      BUGSPLAT_DATABASE: "${{ secrets.BUGSPLAT_DATABASE }}"
+      SYMBOL_UPLOAD_CLIENT_ID: "${{ secrets.BUGSPLAT_SYMBOL_UPLOAD_CLIENT_ID }}"
+      SYMBOL_UPLOAD_CLIENT_SECRET: "${{ secrets.BUGSPLAT_SYMBOL_UPLOAD_CLIENT_SECRET }}"
     needs: build
     if: needs.build.outputs.configuration == 'Release'
     runs-on: ubuntu-latest
     steps:
       - name: Download viewer exe
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: Windows-app
           path: _artifacts
       - name: Download Windows Symbols
-        if: env.BUGSPLAT_USER && env.BUGSPLAT_PASS
-        uses: actions/download-artifact@v4
+        if: env.BUGSPLAT_DATABASE && env.SYMBOL_UPLOAD_CLIENT_ID
+        uses: actions/download-artifact@v8
         with:
           name: Windows-symbols
       - name: Extract viewer pdb
-        if: env.BUGSPLAT_USER && env.BUGSPLAT_PASS
+        if: env.BUGSPLAT_DATABASE && env.SYMBOL_UPLOAD_CLIENT_ID
         shell: bash
         run: |
           tar -xJf "${{ needs.build.outputs.viewer_channel }}.sym.tar.xz" -C _artifacts
       - name: Post Windows symbols
-        if: env.BUGSPLAT_USER && env.BUGSPLAT_PASS
-        uses: secondlife-3p/symbol-upload@v10
+        if: env.BUGSPLAT_DATABASE && env.SYMBOL_UPLOAD_CLIENT_ID
+        uses: BugSplat-Git/symbol-upload@e019eb5090a6cd589268b9119e09cf4a18ace9ad
         with:
-          username: ${{ env.BUGSPLAT_USER }}
-          password: ${{ env.BUGSPLAT_PASS }}
-          database: "SecondLife_Viewer_2018"
+          clientId: "${{ env.SYMBOL_UPLOAD_CLIENT_ID }}"
+          clientSecret: "${{ env.SYMBOL_UPLOAD_CLIENT_SECRET }}"
+          database: "${{ env.BUGSPLAT_DATABASE }}"
           application: ${{ needs.build.outputs.viewer_channel }}
           version: ${{ needs.build.outputs.viewer_version }}
           directory: _artifacts
           files: "**/{SecondLifeViewer.exe,llwebrtc.dll,*.pdb}"
+          node-version: "22"
+          dumpSyms: false
 
+  # Upload can be failure prone and we might need to reupload in some cases,
+  # Keep upload as a separate job, to not require full rebuild on upload failure.
   post-mac-symbols:
     env:
-      BUGSPLAT_USER: ${{ secrets.BUGSPLAT_USER }}
-      BUGSPLAT_PASS: ${{ secrets.BUGSPLAT_PASS }}
+      BUGSPLAT_DATABASE: "${{ secrets.BUGSPLAT_DATABASE }}"
+      SYMBOL_UPLOAD_CLIENT_ID: "${{ secrets.BUGSPLAT_SYMBOL_UPLOAD_CLIENT_ID }}"
+      SYMBOL_UPLOAD_CLIENT_SECRET: "${{ secrets.BUGSPLAT_SYMBOL_UPLOAD_CLIENT_SECRET }}"
     needs: build
     if: needs.build.outputs.configuration == 'Release'
     runs-on: ubuntu-latest
     steps:
       - name: Download Mac Symbols
-        if: env.BUGSPLAT_USER && env.BUGSPLAT_PASS
-        uses: actions/download-artifact@v4
+        if: env.BUGSPLAT_DATABASE && env.SYMBOL_UPLOAD_CLIENT_ID
+        uses: actions/download-artifact@v8
         with:
           name: macOS-symbols
+      - name: Extract dSYM bundles
+        if: env.BUGSPLAT_DATABASE && env.SYMBOL_UPLOAD_CLIENT_ID
+        shell: bash
+        run: |
+          mkdir -p _mac_symbols
+          shopt -s nullglob globstar
+          archives=( **/*.xcarchive.zip )
+          if [ ${#archives[@]} -eq 0 ]; then
+            echo "No .xcarchive.zip archives found in downloaded macOS-symbols artifact"
+            exit 1
+          fi
+          for archive in "${archives[@]}"; do
+            unzip -q "$archive" -d _mac_symbols
+          done
       - name: Post Mac symbols
-        if: env.BUGSPLAT_USER && env.BUGSPLAT_PASS
-        uses: secondlife-3p/symbol-upload@v10
+        if: env.BUGSPLAT_DATABASE && env.SYMBOL_UPLOAD_CLIENT_ID
+        uses: BugSplat-Git/symbol-upload@e019eb5090a6cd589268b9119e09cf4a18ace9ad
         with:
-          username: ${{ env.BUGSPLAT_USER }}
-          password: ${{ env.BUGSPLAT_PASS }}
-          database: "SecondLife_Viewer_2018"
+          clientId: "${{ env.SYMBOL_UPLOAD_CLIENT_ID }}"
+          clientSecret: "${{ env.SYMBOL_UPLOAD_CLIENT_SECRET }}"
+          database: "${{ env.BUGSPLAT_DATABASE }}"
           application: ${{ needs.build.outputs.viewer_channel }}
           version: ${{ needs.build.outputs.viewer_version }} (${{ needs.build.outputs.viewer_version }})
-          directory: .
-          files: "**/*.xcarchive.zip"
+          directory: _mac_symbols
+          files: "**/*.dSYM"
+          node-version: "22"
+          dumpSyms: false
 
   release:
     needs: [setup, build, sign-and-package-windows, sign-and-package-mac]
     runs-on: ubuntu-latest
     if: needs.setup.outputs.release_run
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: "*-installer"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: "*-metadata"
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: "*-releases"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: "Linux-app"
 
       - name: Rename metadata
         run: |
@@ -437,6 +559,8 @@ jobs:
           cp Windows-metadata/newview/viewer_version.txt Windows-viewer_version.txt
           cp macOS-metadata/autobuild-package.xml macOS-autobuild-package.xml
           cp macOS-metadata/newview/viewer_version.txt macOS-viewer_version.txt
+          cp Linux-metadata/autobuild-package.xml Linux-autobuild-package.xml
+          cp Linux-metadata/newview/viewer_version.txt Linux-viewer_version.txt
 
       # forked from softprops/action-gh-release
       - name: Create GitHub release
@@ -455,14 +579,16 @@ jobs:
           prerelease: true
           generate_release_notes: true
           target_commitish: ${{ github.sha }}
-          previous_tag: release
           append_body: true
-          fail_on_unmatched_files: true
+          fail_on_unmatched_files: false
           files: |
             macOS-installer/*.dmg
             Windows-installer/*.exe
+            *.tar.xz
             *-autobuild-package.xml
             *-viewer_version.txt
+            Windows-releases/*
+            macOS-releases/*
 
       - name: post release URL
         run: |

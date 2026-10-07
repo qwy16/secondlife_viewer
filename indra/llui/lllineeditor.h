@@ -60,7 +60,7 @@ class LLLineEditor
 {
 public:
 
-    typedef boost::function<void (LLLineEditor* caller)> keystroke_callback_t;
+    typedef std::function<void (LLLineEditor* caller)> keystroke_callback_t;
 
     struct MaxLength : public LLInitParam::ChoiceBlock<MaxLength>
     {
@@ -95,7 +95,8 @@ public:
                                         show_label_focused,
                                         is_password,
                                         allow_emoji,
-                                        use_bg_color;
+                                        use_bg_color,
+                                        draw_focus_border;
 
         // colors
         Optional<LLUIColor>             cursor_color,
@@ -202,6 +203,7 @@ public:
     void            setLabel(const LLStringExplicit &new_label) { mLabel = new_label; }
     const std::string&  getLabel()  { return mLabel.getString(); }
 
+    void            setDefaultText() { setText(mDefaultText); }
     void            setText(const LLStringExplicit &new_text);
 
     const std::string& getText() const override { return mText.getString(); }
@@ -259,7 +261,7 @@ public:
     void            setSelectAllonCommit(bool b) { mSelectAllonCommit = b; }
 
     void            onKeystroke();
-    typedef boost::function<void (LLLineEditor* caller, void* user_data)> callback_t;
+    typedef std::function<void (LLLineEditor* caller, void* user_data)> callback_t;
     void            setKeystrokeCallback(callback_t callback, void* user_data);
 
     void            setMaxTextLength(S32 max_text_length);
@@ -347,6 +349,7 @@ protected:
     LLFontVertexBuffer mFontBufferSelection;
     LLFontVertexBuffer mFontBufferPostSelection;
     LLFontVertexBuffer mFontBufferLabel;
+    std::string mDefaultText;
     S32         mMaxLengthBytes;            // Max length of the UTF8 string in bytes
     S32         mMaxLengthChars;            // Maximum number of characters in the string
     S32         mCursorPos;                 // I-beam is just after the mCursorPos-th character.
@@ -409,6 +412,7 @@ protected:
 
     bool        mAllowEmoji;
     bool        mUseBgColor;
+    bool        mDrawFocusBorder;
 
     LLWString   mPreeditWString;
     LLWString   mPreeditOverwrittenWString;

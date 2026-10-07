@@ -49,6 +49,7 @@
 #include "llerrorcontrol.h"
 #include "llvoavatarself.h"         // for gAgentAvatarp->getFullname()
 #include <ApplicationServices/ApplicationServices.h>
+#include "llwindowmacosx_iokit.h"
 #ifdef LL_CARBON_CRASH_HANDLER
 #include <Carbon/Carbon.h>
 #endif
@@ -125,6 +126,7 @@ bool pumpMainLoop()
 
 void cleanupViewer()
 {
+    set_os_hibernation_mode(0); // restore default OS hibernation behavior
     if(!LLApp::isError())
     {
         if (gViewerAppPtr)
@@ -133,6 +135,16 @@ void cleanupViewer()
 
     delete gViewerAppPtr;
     gViewerAppPtr = NULL;
+}
+
+void startWatchdog(std::string_view state)
+{
+    gViewerAppPtr->resumeMainloopTimeout(state);
+}
+
+void stopWatchdog()
+{
+    gViewerAppPtr->pauseMainloopTimeout();
 }
 
 void clearDumpLogsDir()
@@ -258,6 +270,11 @@ void infos(const std::string& message)
 
 int main( int argc, char **argv )
 {
+    // Call Tracy first thing to have it allocate memory
+    // https://github.com/wolfpld/tracy/issues/196
+    LL_PROFILER_FRAME_END;
+    LL_PROFILER_SET_THREAD_NAME("App");
+
     // Store off the command line args for use later.
     gArgC = argc;
     gArgV = argv;
@@ -397,6 +414,27 @@ bool LLAppViewerMacOSX::restoreErrorTrap()
     return reset_count == 0;
 }
 
+bool LLAppViewerMacOSX::initSLURLHandler()
+{
+    if (isSecondInstance())
+    {
+        return false;
+    }
+    // Main secondlife:// registration is in info.plist, but macOS
+    // Launch Services caches URL scheme handlers, and a different
+    // viewer might still be registered.
+    // Register URL schemes with Launch Services on every launch
+    register_url_schemes();
+
+    return true;
+}
+
+void LLAppViewerMacOSX::setOSHibernationMode(eHibernationMode mode)
+{
+    // pass to objective-c++
+    set_os_hibernation_mode((int)mode);
+}
+
 std::string LLAppViewerMacOSX::generateSerialNumber()
 {
     char serial_md5[MD5HEX_STR_SIZE];       // Flawfinder: ignore
@@ -404,7 +442,7 @@ std::string LLAppViewerMacOSX::generateSerialNumber()
 
     // JC: Sample code from http://developer.apple.com/technotes/tn/tn1103.html
     CFStringRef serialNumber = NULL;
-    io_service_t    platformExpert = IOServiceGetMatchingService(kIOMasterPortDefault,
+    io_service_t    platformExpert = IOServiceGetMatchingService(kLLIOMainPort,
                                                                  IOServiceMatching("IOPlatformExpertDevice"));
     if (platformExpert)
     {

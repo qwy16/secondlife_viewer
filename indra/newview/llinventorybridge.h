@@ -4,7 +4,7 @@
  *
  * $LicenseInfo:firstyear=2001&license=viewerlgpl$
  * Second Life Viewer Source Code
- * Copyright (C) 2010, Linden Research, Inc.
+ * Copyright (C) 2026, Linden Research, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -86,7 +86,8 @@ public:
     //--------------------------------------------------------------------
     virtual const LLUUID& getUUID() const { return mUUID; }
     virtual const LLUUID& getThumbnailUUID() const { return LLUUID::null; }
-    virtual void clearDisplayName() { mDisplayName.clear(); }
+    virtual bool isFavorite() const { return false; }
+    virtual void clearSearchableName() { mSearchableName.clear(); }
     virtual void restoreItem() {}
     virtual void restoreToWorld() {}
 
@@ -175,6 +176,7 @@ protected:
     bool isLinkedObjectMissing() const; // Is this a linked obj whose baseobj is not in inventory?
 
     bool isAgentInventory() const; // false if lost or in the inventory library
+    bool isAgentInventoryRoot() const; // true if worn by agent
     bool isCOFFolder() const;       // true if COF or descendant of
     bool isInboxFolder() const;     // true if COF or descendant of   marketplace inbox
 
@@ -200,12 +202,11 @@ protected:
     LLInventoryType::EType mInvType;
     bool                        mIsLink;
     LLTimer                     mTimeSinceRequestStart;
-    mutable std::string         mDisplayName;
     mutable std::string         mSearchableName;
 
     void purgeItem(LLInventoryModel *model, const LLUUID &uuid);
     void removeObject(LLInventoryModel *model, const LLUUID &uuid);
-    virtual void buildDisplayName() const {}
+    virtual void buildSearchableName() const {}
 };
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -237,7 +238,7 @@ public:
                  const LLUUID& uuid) :
         LLInvFVBridge(inventory, root, uuid) {}
 
-    typedef boost::function<void(std::string& slurl)> slurl_callback_t;
+    typedef std::function<void(std::string& slurl)> slurl_callback_t;
 
     virtual void performAction(LLInventoryModel* model, std::string action);
     virtual void selectItem();
@@ -259,11 +260,12 @@ public:
 
     LLViewerInventoryItem* getItem() const;
     virtual const LLUUID& getThumbnailUUID() const;
+    virtual bool isFavorite() const;
 
 protected:
     bool confirmRemoveItem(const LLSD& notification, const LLSD& response);
     virtual bool isItemPermissive() const;
-    virtual void buildDisplayName() const;
+    virtual void buildSearchableName() const;
     void doActionOnCurSelectedLandmark(LLLandmarkList::loaded_callback_t cb);
 
 private:
@@ -284,7 +286,7 @@ public:
     void callback_dropItemIntoFolder(const LLSD& notification, const LLSD& response, LLInventoryItem* inv_item);
     void callback_dropCategoryIntoFolder(const LLSD& notification, const LLSD& response, LLInventoryCategory* inv_category);
 
-    virtual void buildDisplayName() const;
+    virtual void buildSearchableName() const;
 
     virtual void performAction(LLInventoryModel* model, std::string action);
     virtual void openItem();
@@ -301,6 +303,7 @@ public:
     virtual std::string getLabelSuffix() const;
     virtual LLFontGL::StyleFlags getLabelStyle() const;
     virtual const LLUUID& getThumbnailUUID() const;
+    virtual bool isFavorite() const;
 
     void setShowDescendantsCount(bool show_count) {mShowDescendantsCount = show_count;}
 
@@ -341,6 +344,7 @@ protected:
     void buildContextMenuOptions(U32 flags, menuentry_vec_t& items,   menuentry_vec_t& disabled_items);
     void buildContextMenuFolderOptions(U32 flags, menuentry_vec_t& items,   menuentry_vec_t& disabled_items);
     void addOpenFolderMenuOptions(U32 flags, menuentry_vec_t& items);
+    void addInventoryFavoritesMenuOptions(menuentry_vec_t& items); // Inventory favorites, not toolbar favorites
 
     //--------------------------------------------------------------------
     // Menu callbacks
@@ -567,6 +571,7 @@ public:
                     LLFolderView* root,
                     const LLUUID& uuid ) :
         LLItemBridge(inventory, root, uuid) {}
+    virtual LLUIImagePtr getIcon() const;
     virtual void openItem();
 };
 
@@ -755,6 +760,46 @@ public:
 };
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// Favorites Inventory Panel related classes
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+// Overridden version of the Inventory-Folder-View-Bridge for Folders
+class LLFavoritesFolderBridge : public LLFolderBridge
+{
+    friend class LLInvFVBridgeAction;
+public:
+    // Creates context menu for Folders related to Recent Inventory Panel.
+    // Uses base logic and than removes from visible items "New..." menu items.
+    LLFavoritesFolderBridge(LLInventoryType::EType type,
+        LLInventoryPanel* inventory,
+        LLFolderView* root,
+        const LLUUID& uuid) :
+        LLFolderBridge(inventory, root, uuid)
+    {
+        mInvType = type;
+    }
+    /*virtual*/ void buildContextMenu(LLMenuGL& menu, U32 flags);
+    /*virtual*/ bool canSortContent() const { return true; }
+};
+
+// Bridge builder to create Inventory-Folder-View-Bridge for Recent Inventory Panel
+class LLFavoritesInventoryBridgeBuilder : public LLInventoryFolderViewModelBuilder
+{
+public:
+    LLFavoritesInventoryBridgeBuilder() {}
+    // Overrides FolderBridge for Recent Inventory Panel.
+    // It use base functionality for bridges other than FolderBridge.
+    virtual LLInvFVBridge* createBridge(LLAssetType::EType asset_type,
+        LLAssetType::EType actual_asset_type,
+        LLInventoryType::EType inv_type,
+        LLInventoryPanel* inventory,
+        LLFolderViewModelInventory* view_model,
+        LLFolderView* root,
+        const LLUUID& uuid,
+        U32 flags = 0x00) const;
+};
+
+//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 // Marketplace Inventory Panel related classes
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -781,14 +826,14 @@ private:
 
 void rez_attachment(LLViewerInventoryItem* item,
                     LLViewerJointAttachment* attachment,
-                    bool replace = false);
+                    bool replace);
 
 // Move items from an in-world object's "Contents" folder to a specified
 // folder in agent inventory.
 bool move_inv_category_world_to_agent(const LLUUID& object_id,
                                       const LLUUID& category_id,
                                       bool drop,
-                                      std::function<void(S32, void*, const LLMoveInv *)> callback = NULL,
+                                      std::function<void(S32, void*, const LLMoveInv *)> callback = nullptr,
                                       void* user_data = NULL,
                                       LLInventoryFilter* filter = NULL);
 

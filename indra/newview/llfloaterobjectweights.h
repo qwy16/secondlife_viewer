@@ -58,23 +58,40 @@ public:
     LLFloaterObjectWeights(const LLSD& key);
     ~LLFloaterObjectWeights();
 
-    /*virtual*/ bool postBuild();
+    bool postBuild() override;
 
-    /*virtual*/ void onOpen(const LLSD& key);
+    void onOpen(const LLSD& key) override;
+    void onClose(bool app_quitting) override;
 
-    /*virtual*/ void onWeightsUpdate(const SelectionCost& selection_cost);
-    /*virtual*/ void setErrorStatus(S32 status, const std::string& reason);
+    void onWeightsUpdate(const SelectionCost& selection_cost) override;
+    void setErrorStatus(S32 status, const std::string& reason) override;
+
+    void draw() override;
+
+    static void onIdleRefresh(void* user_data);
 
     void updateLandImpacts(const LLParcel* parcel);
-    void refresh();
+    void refreshDataFromSelection();
+    void refresh() override;
 
 private:
-    /*virtual*/ void generateTransactionID();
+    void generateTransactionID() override;
 
     void toggleWeightsLoadingIndicators(bool visible);
     void toggleLandImpactsLoadingIndicators(bool visible);
+    void toggleRenderLoadingIndicators(bool visible);
+    void toggleLODLoadingIndicators(bool visible);
 
     void updateIfNothingSelected();
+
+    bool            mWeightsDirty;
+    bool            mSelectionDirty;
+    bool            mSelectionMeshDirty;
+    F64             mSelectionRefreshTime;
+    S32             mSelectionLastLOD;
+    S32             mSelectionLastTris;
+    F32             mSelectionLastArea;
+    S32             mLastActiveLODRequests;
 
     LLTextBox       *mSelectedObjects;
     LLTextBox       *mSelectedPrims;
@@ -88,6 +105,17 @@ private:
     LLTextBox       *mRezzedOnLand;
     LLTextBox       *mRemainingCapacity;
     LLTextBox       *mTotalCapacity;
+
+    LLTextBox       *mLodLevel;
+    LLTextBox       *mTrianglesShown;
+    LLTextBox       *mPixelArea;
+
+    LLTextBox       *mHighLodTris;
+    LLTextBox       *mMediumLodTris;
+    LLTextBox       *mLowLodTris;
+    LLTextBox       *mLowestLodTris;
+
+    boost::signals2::scoped_connection mSelectionConnection;
 };
 
 #endif //LL_LLFLOATEROBJECTWEIGHTS_H

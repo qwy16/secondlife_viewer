@@ -155,10 +155,10 @@ void LLTranslationAPIHandler::verifyKeyCoro(LLTranslate::EService service, LLSD 
 {
     LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
     LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t
-        httpAdapter(new LLCoreHttpUtil::HttpCoroutineAdapter("getMerchantStatusCoro", httpPolicy));
-    LLCore::HttpRequest::ptr_t httpRequest(new LLCore::HttpRequest);
-    LLCore::HttpOptions::ptr_t httpOpts(new LLCore::HttpOptions);
-    LLCore::HttpHeaders::ptr_t httpHeaders(new LLCore::HttpHeaders);
+        httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>("verifyKeyCoro", httpPolicy);
+    LLCore::HttpRequest::ptr_t httpRequest = std::make_shared<LLCore::HttpRequest>();
+    LLCore::HttpOptions::ptr_t httpOpts = std::make_shared<LLCore::HttpOptions>();
+    LLCore::HttpHeaders::ptr_t httpHeaders = std::make_shared<LLCore::HttpHeaders>();
 
 
     std::string user_agent = stringize(
@@ -199,7 +199,7 @@ void LLTranslationAPIHandler::verifyKeyCoro(LLTranslate::EService service, LLSD 
         bOk = false;
     }
 
-    if (!fnc.empty())
+    if (fnc != nullptr)
     {
         fnc(service, bOk, parseResult);
     }
@@ -210,10 +210,10 @@ void LLTranslationAPIHandler::translateMessageCoro(LanguagePair_t fromTo, std::s
 {
     LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
     LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t
-        httpAdapter(new LLCoreHttpUtil::HttpCoroutineAdapter("getMerchantStatusCoro", httpPolicy));
-    LLCore::HttpRequest::ptr_t httpRequest(new LLCore::HttpRequest);
-    LLCore::HttpOptions::ptr_t httpOpts(new LLCore::HttpOptions);
-    LLCore::HttpHeaders::ptr_t httpHeaders(new LLCore::HttpHeaders);
+        httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>("getMerchantStatusCoro", httpPolicy);
+    LLCore::HttpRequest::ptr_t httpRequest = std::make_shared<LLCore::HttpRequest>();
+    LLCore::HttpOptions::ptr_t httpOpts = std::make_shared<LLCore::HttpOptions>();
+    LLCore::HttpHeaders::ptr_t httpHeaders = std::make_shared<LLCore::HttpHeaders>();
 
 
     std::string user_agent = stringize(
@@ -275,7 +275,7 @@ void LLTranslationAPIHandler::translateMessageCoro(LanguagePair_t fromTo, std::s
         LLStringUtil::replaceString(translation, "&amp;", "&");
         LLStringUtil::replaceString(translation, "&apos;", "'");
 
-        if (!success.empty())
+        if (success != nullptr)
             success(translation, detected_lang);
     }
     else
@@ -291,7 +291,7 @@ void LLTranslationAPIHandler::translateMessageCoro(LanguagePair_t fromTo, std::s
         }
 
         LL_WARNS() << "Translation request failed: " << err_msg << LL_ENDL;
-        if (!failure.empty())
+        if (failure != nullptr)
             failure(status, err_msg);
     }
 }
@@ -807,13 +807,7 @@ LLSD LLAzureTranslationHandler::sendMessageAndSuspend(LLCoreHttpUtil::HttpCorout
     LLCore::BufferArray::ptr_t rawbody(new LLCore::BufferArray);
     LLCore::BufferArrayStream outs(rawbody.get());
 
-    static const std::string allowed_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz "
-                                             "0123456789"
-                                             "-._~";
-
-    outs << "[{\"text\":\"";
-    outs << LLURI::escape(msg, allowed_chars);
-    outs << "\"}]";
+    outs << boost::json::serialize(boost::json::array{ boost::json::object{{ "text", msg }} });
 
     return adapter->postRawAndSuspend(request, url, rawbody, options, headers);
 }

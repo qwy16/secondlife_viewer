@@ -24,10 +24,81 @@
  * $/LicenseInfo$
  */
 
+//
+// LOGIN AND CONNECTION SEQUENCE OVERVIEW
+// ======================================
+// The Viewer connects to the SL service in two phases: HTTP authentication
+// followed by UDP "Circuit" establishment to the first Simulator.
+//
+// PHASE 1: HTTP LOGIN (see lllogin.cpp, process_login_success_response())
+// -----------------------------------------------------------------------
+// Viewer sends an XMLRPC HTTP POST to LoginServer containing:
+//   - Credentials (first name, last name, password)
+//   - Client version, channel, MAC address, machine ID
+//   - Start location preferences
+//
+// Login-server responds with critical connection data:
+//   - agent_id, session_id, secure_session_id (authentication tokens)
+//   - Circuit_code (used to establish UDP Circuit with Simulator)
+//   - sim_ip, sim_port (Simulator address to connect to)
+//   - seed_capability (base URL for HTTP capability requests)
+//   - region_x, region_y (region grid coordinates)
+//
+// PHASE 2: UDP CIRCUIT ESTABLISHMENT (see idle_startup() state machine below)
+// ---------------------------------------------------------------------------
+// After HTTP login succeeds, Viewer establishes a UDP Circuit with the
+// simulator. This also happens whenever the Viewer connects to new Simulators
+// in the same session. The following UDP messages are exchanged:
+//
+//   1. UseCircuitCode (Viewer -> Simulator)
+//      - Sent in STATE_WORLD_INIT
+//      - Contains: Circuit_code, session_id, agent_id
+//      - Establishes the UDP Circuit with the Simulator
+//
+//   2. RegionHandshake (Simulator -> Viewer)
+//      - Handled by process_region_handshake() in llworld.cpp
+//      - Contains: region name, terrain textures, water height, region flags
+//      - Viewer responds with RegionHandshakeReply
+//
+//   3. CompleteAgentMovement (Viewer -> Simulator)
+//      - Sent in STATE_AGENT_SEND via send_complete_agent_movement()
+//      - Signals the Viewer is ready to enter the world
+//
+//   4. AgentMovementComplete (Simulator -> Viewer)
+//      - Handled by process_agent_movement_complete() in llviewermessage.cpp
+//      - Contains: final agent position, look_at direction, region handle
+//      - Sets gAgentMovementCompleted = true
+//      - Agent is now fully connected to the region
+//
+// STARTUP STATE MACHINE
+// ---------------------
+// The connection sequence is managed by idle_startup() which progresses
+// through these key states:
+//
+//   STATE_LOGIN_WAIT             - Waiting for HTTP login response
+//   STATE_LOGIN_PROCESS_RESPONSE - Processing login response data
+//   STATE_WORLD_INIT             - Send UseCircuitCode, enable UDP Circuit
+//   STATE_WORLD_WAIT             - Wait for Circuit acknowledgment
+//   STATE_AGENT_SEND             - Send CompleteAgentMovement
+//   STATE_AGENT_WAIT             - Wait for AgentMovementComplete
+//   STATE_INVENTORY_SEND         - Agent connected, begin loading inventory
+//
+// HTTP CAPABILITIES
+// -----------------
+// After UDP connection, Viewer fetches "capability" URLs from the
+// seed_capability endpoint. These provide HTTP endpoints for various
+// services (inventory, textures, etc.) that supplement the UDP protocol.
+//
+
 #include "llviewerprecompiledheaders.h"
 
 #include "llappviewer.h"
 #include "llstartup.h"
+
+#if LL_VELOPACK && LL_WINDOWS
+#include "llvelopack.h"
+#include <shellapi.h>
+#endif
 
 #if LL_WINDOWS
 #   include <process.h>     // _spawnl()
@@ -57,6 +128,7 @@
 #include "lllocationhistory.h"
 #include "llgltfmateriallist.h"
 #include "llimageworker.h"
+#include "llregex.h"
 
 #include "llloginflags.h"
 #include "llmd5.h"
@@ -121,6 +193,7 @@
 #include "llpanellogin.h"
 #include "llmutelist.h"
 #include "llavatarpropertiesprocessor.h"
+#include "llpaneldirbrowser.h"
 #include "llpanelgrouplandmoney.h"
 #include "llpanelgroupnotices.h"
 #include "llparcel.h"
@@ -134,6 +207,7 @@
 #include "llsky.h"
 #include "llstatview.h"
 #include "llstatusbar.h"        // sendMoneyBalanceRequest(), owns L$ balance
+#include "llbuycurrencyhtml.h"
 #include "llsurface.h"
 #include "lltexturecache.h"
 #include "lltexturefetch.h"
@@ -181,7 +255,6 @@
 #include "llnamelistctrl.h"
 #include "llnamebox.h"
 #include "llnameeditor.h"
-#include "llpostprocess.h"
 #include "llagentlanguage.h"
 #include "llwearable.h"
 #include "llinventorybridge.h"
@@ -264,12 +337,12 @@ std::unique_ptr<LLViewerStats::PhaseMap> LLStartUp::sPhases(new LLViewerStats::P
 
 void login_show();
 void login_callback(S32 option, void* userdata);
+void uninstall_nsis_if_required();
 void show_release_notes_if_required();
 void show_first_run_dialog();
 bool first_run_dialog_callback(const LLSD& notification, const LLSD& response);
 void set_startup_status(const F32 frac, const std::string& string, const std::string& msg);
 bool login_alert_status(const LLSD& notification, const LLSD& response);
-void use_circuit_callback(void**, S32 result);
 void register_viewer_callbacks(LLMessageSystem* msg);
 void asset_callback_nothing(const LLUUID&, LLAssetType::EType, void*, S32);
 bool callback_choose_gender(const LLSD& notification, const LLSD& response);
@@ -328,7 +401,7 @@ void do_startup_frame()
                 break;
             }
         }
-        if (needs_drain || gMessageSystem->mPacketRing.getNumBufferedPackets() > 0)
+        if (needs_drain || gMessageSystem->getNumBufferedPackets() > 0)
         {
              gMessageSystem->drainUdpSocket();
         }
@@ -342,13 +415,11 @@ void pump_idle_startup_network(void)
 {
     // while there are message to process:
     //     process one then call display_startup()
-    S32 num_messages = 0;
     {
         LockMessageChecker lmc(gMessageSystem);
         while (lmc.checkAllMessages(gFrameCount, gServicePump))
         {
             display_startup();
-            ++num_messages;
         }
         lmc.processAcks();
     }
@@ -399,6 +470,7 @@ bool idle_startup()
         LL_WARNS_ONCE() << "gViewerWindow is not initialized" << LL_ENDL;
         return false; // No world yet
     }
+    LL_PROFILE_ZONE_SCOPED;
 
     const F32 PRECACHING_DELAY = gSavedSettings.getF32("PrecachingDelay");
     static LLTimer timeout;
@@ -439,7 +511,52 @@ bool idle_startup()
     system = osString.substr (begIdx, endIdx - begIdx);
     system += "Locale";
 
-    LLStringUtil::setLocale (LLTrans::getString(system));
+    std::string locale = LLTrans::getString(system);
+    if (locale != LLStringUtil::getLocale()) // is there a reason to do this on repeat?
+    {
+        LLStringUtil::setLocale(locale);
+
+        // Not all locales have AMPM, test it
+        if (LLStringOps::sAM.empty()) // Might already be overriden from LLAppViewer::init()
+        {
+            LLDate datetime(0.0);
+            std::string val = datetime.toHTTPDateString("%p");
+            if (val.empty())
+            {
+                LL_DEBUGS("InitInfo") << "Current locale \"" << locale << "\" "
+                    << "doesn't support AM/PM time format" << LL_ENDL;
+                // fallback to declarations in strings.xml
+                LLStringOps::sAM = LLTrans::getString("dateTimeAM");
+                LLStringOps::sPM = LLTrans::getString("dateTimePM");
+            }
+            else
+            {
+                std::wstring utf16str = ll_convert<std::wstring>(val);
+                if (utf16str.size() > 4)
+                {
+                    LL_DEBUGS("InitInfo") << "Current locale \"" << locale << "\" "
+                        << "has impracitcally long AM/PM time format" << LL_ENDL;
+                    // fallback to declarations in strings.xml
+                    LLStringOps::sAM = LLTrans::getString("dateTimeAM");
+                    LLStringOps::sPM = LLTrans::getString("dateTimePM");
+                }
+            }
+        }
+
+        // Some locales (as well some of our own dateTimeAM/PM) return long
+        // strings for AM/PM which aren't practical to display in the UI.
+        // Hardcode to "AM"/"PM" in those cases.
+        std::wstring utf16str = ll_convert<std::wstring>(LLStringOps::sAM);
+        if (utf16str.size() > 4)
+        {
+            LLStringOps::sAM = "AM";
+        }
+        utf16str = ll_convert<std::wstring>(LLStringOps::sPM);
+        if (utf16str.size() > 4)
+        {
+            LLStringOps::sPM = "PM";
+        }
+    }
 
     //note: Removing this line will cause incorrect button size in the login screen. -- bao.
     gTextureList.updateImages(0.01f) ;
@@ -542,7 +659,7 @@ bool idle_startup()
         std::string message_template_path = gDirUtilp->getExpandedFilename(LL_PATH_APP_SETTINGS,"message_template.msg");
 
         LLFILE* found_template = NULL;
-        found_template = LLFile::fopen(message_template_path, "r");     /* Flawfinder: ignore */
+        found_template = LLFile::fopen(message_template_path, LLFILE_MODE("r"));     /* Flawfinder: ignore */
 
         #if LL_WINDOWS
             // On the windows dev builds, unpackaged, the message_template.msg
@@ -551,7 +668,7 @@ bool idle_startup()
             if (!found_template)
             {
                 message_template_path = gDirUtilp->getExpandedFilename(LL_PATH_EXECUTABLE, "app_settings", "message_template.msg");
-                found_template = LLFile::fopen(message_template_path.c_str(), "r");     /* Flawfinder: ignore */
+                found_template = LLFile::fopen(message_template_path.c_str(), LLFILE_MODE("r"));     /* Flawfinder: ignore */
             }
         #elif LL_DARWIN
             // On Mac dev builds, message_template.msg lives in:
@@ -561,7 +678,7 @@ bool idle_startup()
                 message_template_path =
                     gDirUtilp->getExpandedFilename(LL_PATH_APP_SETTINGS,
                                                    "message_template.msg");
-                found_template = LLFile::fopen(message_template_path.c_str(), "r");     /* Flawfinder: ignore */
+                found_template = LLFile::fopen(message_template_path.c_str(), LLFILE_MODE("r"));     /* Flawfinder: ignore */
             }
         #endif
 
@@ -668,7 +785,7 @@ bool idle_startup()
 
 
             F32 dropPercent = gSavedSettings.getF32("PacketDropPercentage");
-            msg->mPacketRing.setDropPercentage(dropPercent);
+            msg->setDropPercentage(dropPercent);
         }
 
         LL_INFOS("AppInit") << "Message System Initialized." << LL_ENDL;
@@ -724,6 +841,10 @@ bool idle_startup()
             LL_WARNS("AppInit") << "Unreliable timers detected (may be bad PCI chipset)!!" << LL_ENDL;
         }
 
+#ifdef LL_DISCORD
+        LLAppViewer::initDiscordSocial();
+#endif
+
         //
         // Log on to system
         //
@@ -776,6 +897,7 @@ bool idle_startup()
         set_startup_status(0.03f, msg.c_str(), gAgent.mMOTD.c_str());
         do_startup_frame();
         // LLViewerMedia::initBrowser();
+        LLAppViewer::instance()->createInitedMarker();
         LLStartUp::setStartupState( STATE_LOGIN_SHOW );
         return false;
     }
@@ -871,6 +993,7 @@ bool idle_startup()
         LL_DEBUGS("AppInit") << "PeekMessage processed" << LL_ENDL;
 #endif
         do_startup_frame();
+        uninstall_nsis_if_required();
         timeout.reset();
         return false;
     }
@@ -1296,6 +1419,10 @@ bool idle_startup()
     {
         set_startup_status(0.30f, LLTrans::getString("LoginInitializingWorld"), gAgent.mMOTD);
         do_startup_frame();
+
+        // close login UI before world UI is initialized, if it is still visible
+        LLPanelLogin::closePanel();
+
         // We should have an agent id by this point.
         llassert(!(gAgentID == LLUUID::null));
 
@@ -1322,10 +1449,6 @@ bool idle_startup()
         do_startup_frame();
 
         LLDrawable::initClass();
-        do_startup_frame();
-
-        // init the shader managers
-        LLPostProcess::initClass();
         do_startup_frame();
 
         LLAvatarAppearance::initClass("avatar_lad.xml","avatar_skeleton.xml");
@@ -1657,13 +1780,48 @@ bool idle_startup()
         gUseCircuitCallbackCalled = false;
 
         msg->enableCircuit(gFirstSim, true);
-        // now, use the circuit info to tell simulator about us!
+
+        // UDP CONNECTION STEP 1: Send UseCircuitCode
+        // This is the first UDP message sent to Simulator after HTTP login.
+        // It establishes the UDP circuit using the circuit_code received from
+        // LoginServer. Simulator will respond with an ACK, then send
+        // RegionHandshake message with region details.
         LL_INFOS("AppInit") << "viewer: UserLoginLocationReply() Enabling " << gFirstSim << " with code " << msg->mOurCircuitCode << LL_ENDL;
         msg->newMessageFast(_PREHASH_UseCircuitCode);
         msg->nextBlockFast(_PREHASH_CircuitCode);
         msg->addU32Fast(_PREHASH_Code, msg->mOurCircuitCode);
         msg->addUUIDFast(_PREHASH_SessionID, gAgent.getSessionID());
         msg->addUUIDFast(_PREHASH_ID, gAgent.getID());
+
+        // build a lambda to be used as callback on ACK or timeout
+        void (*use_circuit_callback)(void**, S32) = [](void**, S32 result)
+        {
+            // bail if we're quitting.
+            if(LLApp::isExiting()) return;
+            if( !gUseCircuitCallbackCalled )
+            {
+                gUseCircuitCallbackCalled = true;
+                if (result != LL_ERR_NOERR)
+                {
+                    // Make sure user knows something bad happened. JC
+                    LL_WARNS("AppInit") << "Backing up to login screen!" << LL_ENDL;
+                    if (gRememberPassword)
+                    {
+                        LLNotificationsUtil::add("LoginPacketNeverReceived", LLSD(), LLSD(), login_alert_status);
+                    }
+                    else
+                    {
+                        LLNotificationsUtil::add("LoginPacketNeverReceivedNoTP", LLSD(), LLSD(), login_alert_status);
+                    }
+                    reset_login();
+                }
+                else
+                {
+                    gGotUseCircuitCodeAck = true;
+                }
+            }
+        };
+
         msg->sendReliable(
             gFirstSim,
             gSavedSettings.getS32("UseCircuitCodeMaxRetries"),
@@ -1681,6 +1839,9 @@ bool idle_startup()
     //---------------------------------------------------------------------
     // World Wait
     //---------------------------------------------------------------------
+    // UDP CONNECTION STEP 2: Wait for UseCircuitCode acknowledgment
+    // While waiting, Simulator also sends RegionHandshake (handled by
+    // process_region_handshake() in llworld.cpp) containing region info.
     if(STATE_WORLD_WAIT == LLStartUp::getStartupState())
     {
         LL_DEBUGS("AppInit") << "Waiting for simulator ack...." << LL_ENDL;
@@ -1696,13 +1857,16 @@ bool idle_startup()
     //---------------------------------------------------------------------
     // Agent Send
     //---------------------------------------------------------------------
+    // UDP CONNECTION STEP 3: Send CompleteAgentMovement
+    // After the circuit is established and RegionHandshake received, we signal
+    // to Simulator the Viewer is ready to enter the world.
     if (STATE_AGENT_SEND == LLStartUp::getStartupState())
     {
         LL_DEBUGS("AppInit") << "Connecting to region..." << LL_ENDL;
         set_startup_status(0.60f, LLTrans::getString("LoginConnectingToRegion"), gAgent.mMOTD);
         do_startup_frame();
-        // register with the message system so it knows we're
-        // expecting this message
+        // Register handler process_agent_movement_complete for AgentMovementComplete -
+        // the final UDP message confirming the agent is connected.
         LLMessageSystem* msg = gMessageSystem;
         msg->setHandlerFuncFast(
             _PREHASH_AgentMovementComplete,
@@ -1745,12 +1909,17 @@ bool idle_startup()
     //---------------------------------------------------------------------
     // Agent Wait
     //---------------------------------------------------------------------
+    // UDP CONNECTION STEP 4: Wait for AgentMovementComplete
+    // Simulator responds with the agent's confirmed position and look_at
+    // direction. Once received, gAgentMovementCompleted is set true and the
+    // agent is fully connected to the region.
     if (STATE_AGENT_WAIT == LLStartUp::getStartupState())
     {
         do_startup_frame();
 
         if (gAgentMovementCompleted)
         {
+            // Connection complete - agent is now in-world
             LLStartUp::setStartupState( STATE_INVENTORY_SEND );
         }
         do_startup_frame();
@@ -1795,6 +1964,7 @@ bool idle_startup()
         // Get L$ and ownership credit information
         LL_INFOS() << "Requesting Money Balance" << LL_ENDL;
         LLStatusBar::sendMoneyBalanceRequest();
+        LLBuyCurrencyHTML::checkFeatureFlag();
 
         do_startup_frame();
 
@@ -2102,9 +2272,6 @@ bool idle_startup()
         }
 
         do_startup_frame();
-
-        // We're successfully logged in.
-        gSavedSettings.setBOOL("FirstLoginThisInstall", false);
 
         LLFloaterReg::showInitialVisibleInstances();
 
@@ -2451,6 +2618,27 @@ bool idle_startup()
 
         LLPerfStats::StatsRecorder::setAutotuneInit();
 
+        // Display Avatar Welcome Pack the first time a user logs in
+        // (or clears their settings....)
+        if (gSavedSettings.getBOOL("FirstLoginThisInstall"))
+        {
+            LLFloater* avatar_welcome_pack_floater = LLFloaterReg::findInstance("avatar_welcome_pack");
+            if (avatar_welcome_pack_floater != nullptr)
+            {
+                // There is a (very - 1 in ~50 times) hard to repro bug where the login
+                // page is not hidden when the AWP floater is presented. This (agressive)
+                // approach to always close it seems like the best fix for now.
+                LLPanelLogin::closePanel();
+
+                avatar_welcome_pack_floater->setVisible(true);
+            }
+        }
+
+        //// We're successfully logged in.
+        // 2025-06 Moved lower down in the state machine so the Avatar Welcome Pack
+        // floater display can be triggered correctly.
+        gSavedSettings.setBOOL("FirstLoginThisInstall", false);
+
         return true;
     }
 
@@ -2518,9 +2706,9 @@ void release_notes_coro(const std::string url)
 
     LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
     LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t
-        httpAdapter(new LLCoreHttpUtil::HttpCoroutineAdapter("releaseNotesCoro", httpPolicy));
-    LLCore::HttpRequest::ptr_t httpRequest(new LLCore::HttpRequest);
-    LLCore::HttpOptions::ptr_t httpOpts = LLCore::HttpOptions::ptr_t(new LLCore::HttpOptions);
+        httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>("releaseNotesCoro", httpPolicy);
+    LLCore::HttpRequest::ptr_t httpRequest = std::make_shared<LLCore::HttpRequest>();
+    LLCore::HttpOptions::ptr_t httpOpts = std::make_shared<LLCore::HttpOptions>();
 
     httpOpts->setHeadersOnly(true); // only making sure it isn't 404 or something like that
 
@@ -2538,6 +2726,89 @@ void release_notes_coro(const std::string url)
 }
 
 /**
+* Check if this is a fresh velopack install and
+* if uninstallation of old viewer is needed.
+*/
+void uninstall_nsis_if_required()
+{
+#if LL_VELOPACK && LL_WINDOWS
+    bool checked_for_legacy_install = gSavedSettings.getBOOL("PreviousInstallChecked");
+    if (checked_for_legacy_install)
+    {
+        return;
+    }
+    gSavedSettings.setBOOL("PreviousInstallChecked", true);
+
+    LL_INFOS() << "Looking for previous NSIS installs" << LL_ENDL;
+
+    S32 found_major = 0;
+    S32 found_minor = 0;
+    S32 found_patch = 0;
+    U64 found_build = 0;
+    std::string nsis_path;
+
+    if (!get_nsis_version(found_major, found_minor, found_patch, found_build, nsis_path))
+    {
+        return;
+    }
+
+    LLVersionInfo* ver_inst = LLVersionInfo::getInstance();
+
+    if (found_major > ver_inst->getMajor())
+    {
+        LL_INFOS() << "Found installed nsis version that is newer" << found_major << "." << found_minor << "." << found_patch << "." << found_build << LL_ENDL;
+        return;
+    }
+
+    if (found_major == ver_inst->getMajor()
+        && found_minor > ver_inst->getMinor())
+    {
+        LL_INFOS() << "Found installed nsis version that is newer" << found_major << "." << found_minor << "." << found_patch << "." << found_build << LL_ENDL;
+        return;
+    }
+
+    if (found_major == ver_inst->getMajor()
+        && found_minor == ver_inst->getMinor()
+        && found_patch > ver_inst->getPatch())
+    {
+        LL_INFOS() << "Found installed nsis version that is newer" << found_major << "." << found_minor << "." << found_patch << "." << found_build << LL_ENDL;
+        return;
+    }
+
+    // Assume that nsis is going to be something like x.x.x, while velopack is x.x.(x+1),
+    // so there is no point to check build.
+    LL_INFOS() << "Found NSIS install " << found_major << "." << found_minor << "." << found_patch << "." << found_build << LL_ENDL;
+
+    clear_nsis_links(nsis_path);
+
+    LLSD args;
+    args["VERSION"] = llformat("%d.%d.%d", found_major, found_minor, found_patch);
+    LLNotificationsUtil::add("FoundLegacyNsisInstallation", args);
+#endif
+}
+
+void validate_release_notes_coro(const std::string url)
+{
+    LLVersionInfo& versionInfo(LLVersionInfo::instance());
+    const boost::regex version_regex(R"(\b\d+\.\d+\.\d+\.\d+\b)");
+
+    if (url.find(versionInfo.getVersion()) == std::string::npos // has no our build version
+        && ll_regex_search(url, version_regex)) // has any version
+    {
+        LL_INFOS() << "Received release notes url \"" << url << "\" wwith mismatching build, falling back to locally generated url" << LL_ENDL;
+        // Updater only provides notes for a most recent version, if it is not
+        // the current one, fall back to the hardcoded URL.
+        LLSD info(LLAppViewer::instance()->getViewerInfo());
+        std::string alt_url = info["VIEWER_RELEASE_NOTES_URL"].asString();
+        release_notes_coro(alt_url);
+    }
+    else
+    {
+        release_notes_coro(url);
+    }
+}
+
+/**
 * Check if user is running a new version of the viewer.
 * Display the Release Notes if it's not overriden by the "UpdaterShowReleaseNotes" setting.
 */
@@ -2549,15 +2820,24 @@ void show_release_notes_if_required()
     // below. If viewer release notes stop working, might be because that
     // LLEventMailDrop got moved out of LLVersionInfo and hasn't yet been
     // instantiated.
-    if (!release_notes_shown && (LLVersionInfo::instance().getChannelAndVersion() != gLastRunVersion)
-        && LLVersionInfo::instance().getViewerMaturity() != LLVersionInfo::TEST_VIEWER // don't show Release Notes for the test builds
-        && gSavedSettings.getBOOL("UpdaterShowReleaseNotes")
-        && !gSavedSettings.getBOOL("FirstLoginThisInstall"))
+    if (release_notes_shown
+        || LLVersionInfo::instance().getChannelAndVersion() == gLastRunVersion
+        || gSavedSettings.getBOOL("FirstLoginThisInstall")) // New users don't need to see release notes
+    {
+        return;
+    }
+    S32 mode = gSavedSettings.getS32("UpdaterShowReleaseNotes");
+    if (mode == 0)
+    {
+        return;
+    }
+    if (mode == 2 // Show even for test builds
+        || LLVersionInfo::instance().getViewerMaturity() != LLVersionInfo::TEST_VIEWER) // don't show Release Notes for the test builds
+
     {
 
 #if LL_RELEASE_FOR_DOWNLOAD
-        if (!gSavedSettings.getBOOL("CmdLineSkipUpdater")
-            && !LLAppViewer::instance()->isUpdaterMissing())
+        if (!gSavedSettings.getBOOL("CmdLineSkipUpdater"))
         {
             // Instantiate a "relnotes" listener which assumes any arriving event
             // is the release notes URL string. Since "relnotes" is an
@@ -2570,7 +2850,7 @@ void show_release_notes_if_required()
                 "showrelnotes",
                 [](const LLSD& url) {
                     LLCoros::instance().launch("releaseNotesCoro",
-                    boost::bind(&release_notes_coro, url.asString()));
+                    boost::bind(&validate_release_notes_coro, url.asString()));
                 return false;
             });
         }
@@ -2639,202 +2919,147 @@ bool login_alert_status(const LLSD& notification, const LLSD& response)
 }
 
 
-void use_circuit_callback(void**, S32 result)
-{
-    // bail if we're quitting.
-    if(LLApp::isExiting()) return;
-    if( !gUseCircuitCallbackCalled )
-    {
-        gUseCircuitCallbackCalled = true;
-        if (result)
-        {
-            // Make sure user knows something bad happened. JC
-            LL_WARNS("AppInit") << "Backing up to login screen!" << LL_ENDL;
-            if (gRememberPassword)
-            {
-                LLNotificationsUtil::add("LoginPacketNeverReceived", LLSD(), LLSD(), login_alert_status);
-            }
-            else
-            {
-                LLNotificationsUtil::add("LoginPacketNeverReceivedNoTP", LLSD(), LLSD(), login_alert_status);
-            }
-            reset_login();
-        }
-        else
-        {
-            gGotUseCircuitCodeAck = true;
-        }
-    }
-}
-
 void register_viewer_callbacks(LLMessageSystem* msg)
 {
-    msg->setHandlerFuncFast(_PREHASH_LayerData,             process_layer_data );
-    msg->setHandlerFuncFast(_PREHASH_ObjectUpdate,              process_object_update );
-    msg->setHandlerFunc("ObjectUpdateCompressed",               process_compressed_object_update );
-    msg->setHandlerFunc("ObjectUpdateCached",                   process_cached_object_update );
+    msg->setHandlerFuncFast(_PREHASH_LayerData,                 process_layer_data);
+    msg->setHandlerFuncFast(_PREHASH_ObjectUpdate,              process_object_update);
+    msg->setHandlerFuncFast(_PREHASH_ObjectUpdateCompressed,    process_compressed_object_update);
+    msg->setHandlerFuncFast(_PREHASH_ObjectUpdateCached,        process_cached_object_update);
     msg->setHandlerFuncFast(_PREHASH_ImprovedTerseObjectUpdate, process_terse_object_update_improved );
-    msg->setHandlerFunc("SimStats",             process_sim_stats);
-    msg->setHandlerFuncFast(_PREHASH_HealthMessage,         process_health_message );
+    msg->setHandlerFuncFast(_PREHASH_SimStats,                  process_sim_stats);
+    msg->setHandlerFuncFast(_PREHASH_HealthMessage,             process_health_message);
     msg->setHandlerFuncFast(_PREHASH_EconomyData,               process_economy_data);
-    msg->setHandlerFunc("RegionInfo", LLViewerRegion::processRegionInfo);
+    msg->setHandlerFuncFast(_PREHASH_RegionInfo,                LLViewerRegion::processRegionInfo);
 
-    msg->setHandlerFuncFast(_PREHASH_ChatFromSimulator,     process_chat_from_simulator);
-    msg->setHandlerFuncFast(_PREHASH_KillObject,                process_kill_object,    NULL);
-    msg->setHandlerFuncFast(_PREHASH_SimulatorViewerTimeMessage,    process_time_synch,     NULL);
+    msg->setHandlerFuncFast(_PREHASH_ChatFromSimulator,         process_chat_from_simulator);
+    msg->setHandlerFuncFast(_PREHASH_KillObject,                process_kill_object);
+    msg->setHandlerFuncFast(_PREHASH_SimulatorViewerTimeMessage,process_time_synch);
     msg->setHandlerFuncFast(_PREHASH_EnableSimulator,           process_enable_simulator);
     msg->setHandlerFuncFast(_PREHASH_DisableSimulator,          process_disable_simulator);
-    msg->setHandlerFuncFast(_PREHASH_KickUser,                  process_kick_user,      NULL);
+    msg->setHandlerFuncFast(_PREHASH_KickUser,                  process_kick_user);
 
-    msg->setHandlerFunc("CrossedRegion", process_crossed_region);
-    msg->setHandlerFuncFast(_PREHASH_TeleportFinish, process_teleport_finish);
+    msg->setHandlerFuncFast(_PREHASH_CrossedRegion,             process_crossed_region);
+    msg->setHandlerFuncFast(_PREHASH_TeleportFinish,            process_teleport_finish);
 
-    msg->setHandlerFuncFast(_PREHASH_AlertMessage,             process_alert_message);
-    msg->setHandlerFunc("AgentAlertMessage", process_agent_alert_message);
-    msg->setHandlerFuncFast(_PREHASH_MeanCollisionAlert,             process_mean_collision_alert_message,  NULL);
-    msg->setHandlerFunc("ViewerFrozenMessage",             process_frozen_message);
+    msg->setHandlerFuncFast(_PREHASH_AlertMessage,              process_alert_message);
+    msg->setHandlerFuncFast(_PREHASH_AgentAlertMessage,         process_agent_alert_message);
+    msg->setHandlerFuncFast(_PREHASH_MeanCollisionAlert,        process_mean_collision_alert_message);
+    msg->setHandlerFuncFast(_PREHASH_ViewerFrozenMessage,       process_frozen_message);
 
-    msg->setHandlerFuncFast(_PREHASH_NameValuePair,         process_name_value);
-    msg->setHandlerFuncFast(_PREHASH_RemoveNameValuePair,   process_remove_name_value);
-    msg->setHandlerFuncFast(_PREHASH_AvatarAnimation,       process_avatar_animation);
-    msg->setHandlerFuncFast(_PREHASH_ObjectAnimation,       process_object_animation);
-    msg->setHandlerFuncFast(_PREHASH_AvatarAppearance,      process_avatar_appearance);
-    msg->setHandlerFuncFast(_PREHASH_CameraConstraint,      process_camera_constraint);
-    msg->setHandlerFuncFast(_PREHASH_AvatarSitResponse,     process_avatar_sit_response);
-    msg->setHandlerFunc("SetFollowCamProperties",           process_set_follow_cam_properties);
-    msg->setHandlerFunc("ClearFollowCamProperties",         process_clear_follow_cam_properties);
+    msg->setHandlerFuncFast(_PREHASH_NameValuePair,             process_name_value);
+    msg->setHandlerFuncFast(_PREHASH_RemoveNameValuePair,       process_remove_name_value);
+    msg->setHandlerFuncFast(_PREHASH_AvatarAnimation,           process_avatar_animation);
+    msg->setHandlerFuncFast(_PREHASH_ObjectAnimation,           process_object_animation);
+    msg->setHandlerFuncFast(_PREHASH_AvatarAppearance,          process_avatar_appearance);
+    msg->setHandlerFuncFast(_PREHASH_CameraConstraint,          process_camera_constraint);
+    msg->setHandlerFuncFast(_PREHASH_AvatarSitResponse,         process_avatar_sit_response);
+    msg->setHandlerFuncFast(_PREHASH_SetFollowCamProperties,    process_set_follow_cam_properties);
+    msg->setHandlerFuncFast(_PREHASH_ClearFollowCamProperties,  process_clear_follow_cam_properties);
 
     msg->setHandlerFuncFast(_PREHASH_ImprovedInstantMessage,    process_improved_im);
     msg->setHandlerFuncFast(_PREHASH_ScriptQuestion,            process_script_question);
-    msg->setHandlerFuncFast(_PREHASH_ObjectProperties,          LLSelectMgr::processObjectProperties, NULL);
-    msg->setHandlerFuncFast(_PREHASH_ObjectPropertiesFamily,    LLSelectMgr::processObjectPropertiesFamily, NULL);
-    msg->setHandlerFunc("ForceObjectSelect", LLSelectMgr::processForceObjectSelect);
+    msg->setHandlerFuncFast(_PREHASH_ObjectProperties,          LLSelectMgr::processObjectProperties);
+    msg->setHandlerFuncFast(_PREHASH_ObjectPropertiesFamily,    LLSelectMgr::processObjectPropertiesFamily);
+    msg->setHandlerFuncFast(_PREHASH_ForceObjectSelect,         LLSelectMgr::processForceObjectSelect);
 
-    msg->setHandlerFuncFast(_PREHASH_MoneyBalanceReply,     process_money_balance_reply,    NULL);
-    msg->setHandlerFuncFast(_PREHASH_CoarseLocationUpdate,      LLWorld::processCoarseUpdate, NULL);
-    msg->setHandlerFuncFast(_PREHASH_ReplyTaskInventory,        LLViewerObject::processTaskInv, NULL);
-    msg->setHandlerFuncFast(_PREHASH_DerezContainer,            process_derez_container, NULL);
-    msg->setHandlerFuncFast(_PREHASH_ScriptRunningReply,
-                        &LLLiveLSLEditor::processScriptRunningReply);
+    msg->setHandlerFuncFast(_PREHASH_MoneyBalanceReply,         process_money_balance_reply);
+    msg->setHandlerFuncFast(_PREHASH_CoarseLocationUpdate,      LLWorld::processCoarseUpdate);
+    msg->setHandlerFuncFast(_PREHASH_ReplyTaskInventory,        LLViewerObject::processTaskInv);
+    msg->setHandlerFuncFast(_PREHASH_DerezContainer,            process_derez_container);
+    msg->setHandlerFuncFast(_PREHASH_ScriptRunningReply,        LLLiveLSLEditor::processScriptRunningReply);
 
-    msg->setHandlerFuncFast(_PREHASH_DeRezAck, process_derez_ack);
+    msg->setHandlerFuncFast(_PREHASH_DeRezAck,                  process_derez_ack);
 
-    msg->setHandlerFunc("LogoutReply", process_logout_reply);
+    msg->setHandlerFuncFast(_PREHASH_LogoutReply,               process_logout_reply);
 
-    //msg->setHandlerFuncFast(_PREHASH_AddModifyAbility,
-    //                  &LLAgent::processAddModifyAbility);
-    //msg->setHandlerFuncFast(_PREHASH_RemoveModifyAbility,
-    //                  &LLAgent::processRemoveModifyAbility);
-    msg->setHandlerFuncFast(_PREHASH_AgentDataUpdate,
-                        &LLAgent::processAgentDataUpdate);
-    msg->setHandlerFuncFast(_PREHASH_AgentGroupDataUpdate,
-                        &LLAgent::processAgentGroupDataUpdate);
-    msg->setHandlerFunc("AgentDropGroup",
-                        &LLAgent::processAgentDropGroup);
+    //msg->setHandlerFuncFast(_PREHASH_AddModifyAbility,      LLAgent::processAddModifyAbility);
+    //msg->setHandlerFuncFast(_PREHASH_RemoveModifyAbility,   LLAgent::processRemoveModifyAbility);
+    msg->setHandlerFuncFast(_PREHASH_AgentDataUpdate,       LLAgent::processAgentDataUpdate);
+    msg->setHandlerFuncFast(_PREHASH_AgentGroupDataUpdate,  LLAgent::processAgentGroupDataUpdate);
+    msg->setHandlerFuncFast(_PREHASH_AgentDropGroup,        LLAgent::processAgentDropGroup);
     // land ownership messages
-    msg->setHandlerFuncFast(_PREHASH_ParcelOverlay,
-                        LLViewerParcelMgr::processParcelOverlay);
-    msg->setHandlerFuncFast(_PREHASH_ParcelProperties,
-                        LLViewerParcelMgr::processParcelProperties);
-    msg->setHandlerFunc("ParcelAccessListReply",
-        LLViewerParcelMgr::processParcelAccessListReply);
-    msg->setHandlerFunc("ParcelDwellReply",
-        LLViewerParcelMgr::processParcelDwellReply);
+    msg->setHandlerFuncFast(_PREHASH_ParcelOverlay,         LLViewerParcelMgr::processParcelOverlay);
+    msg->setHandlerFuncFast(_PREHASH_ParcelProperties,      LLViewerParcelMgr::processParcelProperties);
+    msg->setHandlerFuncFast(_PREHASH_ParcelAccessListReply, LLViewerParcelMgr::processParcelAccessListReply);
+    msg->setHandlerFuncFast(_PREHASH_ParcelDwellReply,      LLViewerParcelMgr::processParcelDwellReply);
 
-    msg->setHandlerFunc("AvatarPropertiesReply",
-                        &LLAvatarPropertiesProcessor::processAvatarLegacyPropertiesReply);
-    msg->setHandlerFunc("AvatarInterestsReply",
-                        &LLAvatarPropertiesProcessor::processAvatarInterestsReply);
-    msg->setHandlerFunc("AvatarGroupsReply",
-                        &LLAvatarPropertiesProcessor::processAvatarGroupsReply);
-    msg->setHandlerFunc("AvatarNotesReply",
-                        &LLAvatarPropertiesProcessor::processAvatarNotesReply);
-    msg->setHandlerFunc("AvatarPicksReply",
-                        &LLAvatarPropertiesProcessor::processAvatarPicksReply);
-    msg->setHandlerFunc("AvatarClassifiedReply",
-                        &LLAvatarPropertiesProcessor::processAvatarClassifiedsReply);
+    msg->setHandlerFuncFast(_PREHASH_AvatarPropertiesReply, LLAvatarPropertiesProcessor::processAvatarLegacyPropertiesReply);
+    msg->setHandlerFuncFast(_PREHASH_AvatarInterestsReply,  LLAvatarPropertiesProcessor::processAvatarInterestsReply);
+    msg->setHandlerFuncFast(_PREHASH_AvatarGroupsReply,     LLAvatarPropertiesProcessor::processAvatarGroupsReply);
+    msg->setHandlerFuncFast(_PREHASH_AvatarNotesReply,      LLAvatarPropertiesProcessor::processAvatarNotesReply);
+    msg->setHandlerFuncFast(_PREHASH_AvatarPicksReply,      LLAvatarPropertiesProcessor::processAvatarPicksReply);
+    msg->setHandlerFuncFast(_PREHASH_AvatarClassifiedReply, LLAvatarPropertiesProcessor::processAvatarClassifiedsReply);
 
-    msg->setHandlerFuncFast(_PREHASH_CreateGroupReply,
-                        LLGroupMgr::processCreateGroupReply);
-    msg->setHandlerFuncFast(_PREHASH_JoinGroupReply,
-                        LLGroupMgr::processJoinGroupReply);
-    msg->setHandlerFuncFast(_PREHASH_EjectGroupMemberReply,
-                        LLGroupMgr::processEjectGroupMemberReply);
-    msg->setHandlerFuncFast(_PREHASH_LeaveGroupReply,
-                        LLGroupMgr::processLeaveGroupReply);
-    msg->setHandlerFuncFast(_PREHASH_GroupProfileReply,
-                        LLGroupMgr::processGroupPropertiesReply);
+    msg->setHandlerFuncFast(_PREHASH_CreateGroupReply,      LLGroupMgr::processCreateGroupReply);
+    msg->setHandlerFuncFast(_PREHASH_JoinGroupReply,        LLGroupMgr::processJoinGroupReply);
+    msg->setHandlerFuncFast(_PREHASH_EjectGroupMemberReply, LLGroupMgr::processEjectGroupMemberReply);
+    msg->setHandlerFuncFast(_PREHASH_LeaveGroupReply,       LLGroupMgr::processLeaveGroupReply);
+    msg->setHandlerFuncFast(_PREHASH_GroupProfileReply,     LLGroupMgr::processGroupPropertiesReply);
 
     // ratings deprecated
-    // msg->setHandlerFuncFast(_PREHASH_ReputationIndividualReply,
-    //                  LLFloaterRate::processReputationIndividualReply);
+    //msg->setHandlerFuncFast(_PREHASH_ReputationIndividualReply,    LLFloaterRate::processReputationIndividualReply);
 
-    msg->setHandlerFunc("ScriptControlChange",
-                        LLAgent::processScriptControlChange );
+    msg->setHandlerFuncFast(_PREHASH_ScriptControlChange,           LLAgent::processScriptControlChange );
+    msg->setHandlerFuncFast(_PREHASH_ViewerEffect,                  LLHUDManager::processViewerEffect);
+    msg->setHandlerFuncFast(_PREHASH_GrantGodlikePowers,            process_grant_godlike_powers);
+    msg->setHandlerFuncFast(_PREHASH_GroupAccountSummaryReply,      LLPanelGroupLandMoney::processGroupAccountSummaryReply);
+    msg->setHandlerFuncFast(_PREHASH_GroupAccountDetailsReply,      LLPanelGroupLandMoney::processGroupAccountDetailsReply);
+    msg->setHandlerFuncFast(_PREHASH_GroupAccountTransactionsReply, LLPanelGroupLandMoney::processGroupAccountTransactionsReply);
 
-    msg->setHandlerFuncFast(_PREHASH_ViewerEffect, LLHUDManager::processViewerEffect);
+    msg->setHandlerFuncFast(_PREHASH_UserInfoReply,                 process_user_info_reply);
 
-    msg->setHandlerFuncFast(_PREHASH_GrantGodlikePowers, process_grant_godlike_powers);
+    msg->setHandlerFuncFast(_PREHASH_RegionHandshake,               process_region_handshake);
 
-    msg->setHandlerFuncFast(_PREHASH_GroupAccountSummaryReply,
-                            LLPanelGroupLandMoney::processGroupAccountSummaryReply);
-    msg->setHandlerFuncFast(_PREHASH_GroupAccountDetailsReply,
-                            LLPanelGroupLandMoney::processGroupAccountDetailsReply);
-    msg->setHandlerFuncFast(_PREHASH_GroupAccountTransactionsReply,
-                            LLPanelGroupLandMoney::processGroupAccountTransactionsReply);
+    msg->setHandlerFuncFast(_PREHASH_TeleportStart,                 process_teleport_start);
+    msg->setHandlerFuncFast(_PREHASH_TeleportProgress,              process_teleport_progress);
+    msg->setHandlerFuncFast(_PREHASH_TeleportFailed,                process_teleport_failed);
+    msg->setHandlerFuncFast(_PREHASH_TeleportLocal,                 process_teleport_local);
 
-    msg->setHandlerFuncFast(_PREHASH_UserInfoReply,
-        process_user_info_reply);
+    msg->setHandlerFuncFast(_PREHASH_ImageNotInDatabase,            LLViewerTextureList::processImageNotInDatabase);
 
-    msg->setHandlerFunc("RegionHandshake", process_region_handshake, NULL);
-
-    msg->setHandlerFunc("TeleportStart", process_teleport_start );
-    msg->setHandlerFunc("TeleportProgress", process_teleport_progress);
-    msg->setHandlerFunc("TeleportFailed", process_teleport_failed, NULL);
-    msg->setHandlerFunc("TeleportLocal", process_teleport_local, NULL);
-
-    msg->setHandlerFunc("ImageNotInDatabase", LLViewerTextureList::processImageNotInDatabase, NULL);
-
-    msg->setHandlerFuncFast(_PREHASH_GroupMembersReply,
-                        LLGroupMgr::processGroupMembersReply);
-    msg->setHandlerFunc("GroupRoleDataReply",
-                        LLGroupMgr::processGroupRoleDataReply);
-    msg->setHandlerFunc("GroupRoleMembersReply",
-                        LLGroupMgr::processGroupRoleMembersReply);
-    msg->setHandlerFunc("GroupTitlesReply",
-                        LLGroupMgr::processGroupTitlesReply);
+    msg->setHandlerFuncFast(_PREHASH_GroupMembersReply,             LLGroupMgr::processGroupMembersReply);
+    msg->setHandlerFuncFast(_PREHASH_GroupRoleDataReply,            LLGroupMgr::processGroupRoleDataReply);
+    msg->setHandlerFuncFast(_PREHASH_GroupRoleMembersReply,         LLGroupMgr::processGroupRoleMembersReply);
+    msg->setHandlerFuncFast(_PREHASH_GroupTitlesReply,              LLGroupMgr::processGroupTitlesReply);
     // Special handler as this message is sometimes used for group land.
-    msg->setHandlerFunc("PlacesReply", process_places_reply);
-    msg->setHandlerFunc("GroupNoticesListReply", LLPanelGroupNotices::processGroupNoticesListReply);
+    msg->setHandlerFuncFast(_PREHASH_PlacesReply,                   process_places_reply);
+    msg->setHandlerFuncFast(_PREHASH_GroupNoticesListReply,         LLPanelGroupNotices::processGroupNoticesListReply);
 
-    msg->setHandlerFunc("AvatarPickerReply", LLFloaterAvatarPicker::processAvatarPickerReply);
+    msg->setHandlerFuncFast(_PREHASH_AvatarPickerReply,             LLFloaterAvatarPicker::processAvatarPickerReply);
 
-    msg->setHandlerFunc("MapBlockReply", LLWorldMapMessage::processMapBlockReply);
-    msg->setHandlerFunc("MapItemReply", LLWorldMapMessage::processMapItemReply);
-    msg->setHandlerFunc("EventInfoReply", LLEventNotifier::processEventInfoReply);
+    msg->setHandlerFuncFast(_PREHASH_DirPlacesReply,                LLPanelDirBrowser::processDirPlacesReply);
+    msg->setHandlerFuncFast(_PREHASH_DirPeopleReply,                LLPanelDirBrowser::processDirPeopleReply);
+    msg->setHandlerFuncFast(_PREHASH_DirEventsReply,                LLPanelDirBrowser::processDirEventsReply);
+    msg->setHandlerFuncFast(_PREHASH_DirGroupsReply,                LLPanelDirBrowser::processDirGroupsReply);
+    msg->setHandlerFuncFast(_PREHASH_DirClassifiedReply,            LLPanelDirBrowser::processDirClassifiedReply);
+    msg->setHandlerFuncFast(_PREHASH_DirLandReply,                  LLPanelDirBrowser::processDirLandReply);
 
-    msg->setHandlerFunc("PickInfoReply", &LLAvatarPropertiesProcessor::processPickInfoReply);
-    msg->setHandlerFunc("ClassifiedInfoReply", LLAvatarPropertiesProcessor::processClassifiedInfoReply);
-    msg->setHandlerFunc("ParcelInfoReply", LLRemoteParcelInfoProcessor::processParcelInfoReply);
-    msg->setHandlerFunc("ScriptDialog", process_script_dialog);
-    msg->setHandlerFunc("LoadURL", process_load_url);
-    msg->setHandlerFunc("ScriptTeleportRequest", process_script_teleport_request);
-    msg->setHandlerFunc("EstateCovenantReply", process_covenant_reply);
+    msg->setHandlerFuncFast(_PREHASH_MapBlockReply,                 LLWorldMapMessage::processMapBlockReply);
+    msg->setHandlerFuncFast(_PREHASH_MapItemReply,                  LLWorldMapMessage::processMapItemReply);
+    msg->setHandlerFuncFast(_PREHASH_EventInfoReply,                LLEventNotifier::processEventInfoReply);
+
+    msg->setHandlerFuncFast(_PREHASH_PickInfoReply,                 LLAvatarPropertiesProcessor::processPickInfoReply);
+    msg->setHandlerFuncFast(_PREHASH_ClassifiedInfoReply,           LLAvatarPropertiesProcessor::processClassifiedInfoReply);
+    msg->setHandlerFuncFast(_PREHASH_ParcelInfoReply,               LLRemoteParcelInfoProcessor::processParcelInfoReply);
+    msg->setHandlerFuncFast(_PREHASH_ScriptDialog,                  process_script_dialog);
+    msg->setHandlerFuncFast(_PREHASH_LoadURL,                       process_load_url);
+    msg->setHandlerFuncFast(_PREHASH_ScriptTeleportRequest,         process_script_teleport_request);
+    msg->setHandlerFuncFast(_PREHASH_EstateCovenantReply,           process_covenant_reply);
 
     // calling cards
-    msg->setHandlerFunc("OfferCallingCard", process_offer_callingcard);
-    msg->setHandlerFunc("AcceptCallingCard", process_accept_callingcard);
-    msg->setHandlerFunc("DeclineCallingCard", process_decline_callingcard);
+    msg->setHandlerFuncFast(_PREHASH_OfferCallingCard,              process_offer_callingcard);
+    msg->setHandlerFuncFast(_PREHASH_AcceptCallingCard,             process_accept_callingcard);
+    msg->setHandlerFuncFast(_PREHASH_DeclineCallingCard,            process_decline_callingcard);
 
-    msg->setHandlerFunc("ParcelObjectOwnersReply", LLPanelLandObjects::processParcelObjectOwnersReply);
+    msg->setHandlerFuncFast(_PREHASH_ParcelObjectOwnersReply,       LLPanelLandObjects::processParcelObjectOwnersReply);
 
-    msg->setHandlerFunc("InitiateDownload", process_initiate_download);
-    msg->setHandlerFunc("LandStatReply", LLFloaterTopObjects::handle_land_reply);
-    msg->setHandlerFunc("GenericMessage", process_generic_message);
-    msg->setHandlerFunc("GenericStreamingMessage", process_generic_streaming_message);
-    msg->setHandlerFunc("LargeGenericMessage", process_large_generic_message);
+    msg->setHandlerFuncFast(_PREHASH_InitiateDownload,              process_initiate_download);
+    msg->setHandlerFuncFast(_PREHASH_LandStatReply,                 LLFloaterTopObjects::handle_land_reply);
+    msg->setHandlerFuncFast(_PREHASH_GenericMessage,                process_generic_message);
+    msg->setHandlerFuncFast(_PREHASH_GenericStreamingMessage,       process_generic_streaming_message);
+    msg->setHandlerFuncFast(_PREHASH_LargeGenericMessage,           process_large_generic_message);
 
-    msg->setHandlerFuncFast(_PREHASH_FeatureDisabled, process_feature_disabled_message);
+    msg->setHandlerFuncFast(_PREHASH_FeatureDisabled,               process_feature_disabled_message);
 }
 
 void asset_callback_nothing(const LLUUID&, LLAssetType::EType, void*, S32)
@@ -3068,14 +3293,22 @@ void reset_login()
     if ( gViewerWindow )
     {   // Hide menus and normal buttons
         gViewerWindow->setNormalControlsVisible( false );
-        gLoginMenuBarView->setVisible( true );
-        gLoginMenuBarView->setEnabled( true );
+
+        if (gLoginMenuBarView)
+        {
+            gLoginMenuBarView->setVisible(true);
+            gLoginMenuBarView->setEnabled(true);
+        }
+        else
+        {
+            LL_WARNS("AppInit") << "gLoginMenuBarView not initialized" << LL_ENDL;
+        }
     }
 
     // Hide any other stuff
     LLFloaterReg::hideVisibleInstances();
 
-    if (LLStartUp::getStartupState() > STATE_WORLD_INIT)
+    if (LLStartUp::getStartupState() > STATE_WORLD_INIT && gViewerWindow)
     {
         gViewerWindow->resetStatusBarContainer();
     }
@@ -3544,6 +3777,14 @@ bool init_benefits(LLSD& response)
     return succ;
 }
 
+// HTTP LOGIN RESPONSE PROCESSING
+// Called after successful HTTP XMLRPC authentication. Extracts critical data
+// from LoginServer response needed to establish the UDP connection:
+//   - agent_id, session_id, secure_session_id (authentication tokens)
+//   - circuit_code (used in UseCircuitCode UDP message)
+//   - sim_ip, sim_port (simulator address for UDP circuit)
+//   - seed_capability (URL for fetching HTTP capability endpoints)
+//
 bool process_login_success_response()
 {
     LLSD response = LLLoginInstance::getInstance()->getResponse();
@@ -3666,6 +3907,8 @@ bool process_login_success_response()
         gAgentStartLocation.assign(text);
     }
 
+    // Extract UDP circuit parameters from login response.
+    // These are used in STATE_WORLD_INIT to establish the UDP circuit.
     text = response["circuit_code"].asString();
     if(!text.empty())
     {

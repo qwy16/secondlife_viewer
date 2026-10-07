@@ -38,6 +38,13 @@ class LLSplashScreen;
 class LLPreeditor;
 class LLWindowCallbacks;
 
+// Result of an OS font-fallback query; empty mPath means no font was found.
+struct LLFontFallbackMatch
+{
+    std::string mPath;
+    S32 mFaceIndex = 0;
+};
+
 // Refer to llwindow_test in test/common/llwindow for usage example
 
 class LLWindow : public LLInstanceTracker<LLWindow>
@@ -71,7 +78,12 @@ public:
     virtual void restore() = 0;
     bool getFullscreen()    { return mFullscreen; };
     virtual bool getPosition(LLCoordScreen *position) = 0;
+
+    // Returns the platform-defined window size in physical (backing) pixels.
+    // On macOS: backing content view size (excludes title bar).
+    // On Windows: outer window frame size (includes title bar and borders).
     virtual bool getSize(LLCoordScreen *size) = 0;
+
     virtual bool getSize(LLCoordWindow *size) = 0;
     virtual bool setPosition(LLCoordScreen position) = 0;
     bool setSize(LLCoordScreen size);
@@ -92,9 +104,10 @@ public:
 
     virtual bool setCursorPosition(LLCoordWindow position) = 0;
     virtual bool getCursorPosition(LLCoordWindow *position) = 0;
-#if LL_WINDOWS
+#if LL_WINDOWS && !LL_SDL_WINDOW
     virtual bool getCursorDelta(LLCoordCommon* delta) = 0;
 #endif
+    virtual bool isWrapMouse() const = 0;
     virtual void showCursor() = 0;
     virtual void hideCursor() = 0;
     virtual bool isCursorHidden() = 0;
@@ -147,7 +160,6 @@ public:
     virtual void swapBuffers() = 0;
     virtual void bringToFront() = 0;
     virtual void focusClient() { };     // this may not have meaning or be required on other platforms, therefore, it's not abstract
-    virtual void setOldResize(bool oldresize) { };
     // handy coordinate space conversion routines
     // NB: screen to window and vice verse won't work on width/height coordinate pairs,
     // as the conversion must take into account left AND right border widths, etc.
@@ -174,9 +186,6 @@ public:
 // return a platform-specific window reference (HWND on Windows, WindowRef on the Mac, Gtk window on Linux)
     virtual void *getPlatformWindow() = 0;
 
-// return the platform-specific window reference we use to initialize llmozlib (HWND on Windows, WindowRef on the Mac, Gtk window on Linux)
-    virtual void *getMediaWindow();
-
     // control platform's Language Text Input mechanisms.
     virtual void allowLanguageTextInput(LLPreeditor *preeditor, bool b) {}
     virtual void setLanguageTextInput( const LLCoordGL & pos ) {};
@@ -185,6 +194,9 @@ public:
     virtual void spawnWebBrowser(const std::string& escaped_url, bool async) {};
 
     static std::vector<std::string> getDynamicFallbackFontList();
+
+    // Ask the OS for a font file covering the given codepoint (lazy fallback).
+    static LLFontFallbackMatch findFallbackFontForChar(llwchar wch);
 
     // Provide native key event data
     virtual LLSD getNativeKeyData() { return LLSD::emptyMap(); }
@@ -205,6 +217,8 @@ public:
     };
 
     virtual S32 getRefreshRate() { return mRefreshRate; }
+
+    virtual void initWatchdog() {} // windows runs window as a thread and it needs a watchdog
 protected:
     LLWindow(LLWindowCallbacks* callbacks, bool fullscreen, U32 flags);
     virtual ~LLWindow();

@@ -10,10 +10,6 @@ include(WebRTC)
 
 project(llwebrtc)
 
-if (LINUX)
-    add_compile_options(-Wno-deprecated-declarations) # webrtc::CreateAudioDeviceWithDataObserver is deprecated
-endif (LINUX)
-
 set(llwebrtc_SOURCE_FILES
     llwebrtc.cpp
     )
@@ -44,14 +40,23 @@ if (WINDOWS)
                                        msdmo
                                        strmiids
                                        iphlpapi
+                                       crypt32
                                        libcmt)
     # as the webrtc libraries are release, build this binary as release as well.
-    target_compile_options(llwebrtc PRIVATE "/MT")
+    target_compile_options(llwebrtc PRIVATE "/MT" "/Zc:wchar_t")
     if (USE_BUGSPLAT)
         set_target_properties(llwebrtc PROPERTIES PDB_OUTPUT_DIRECTORY "${SYMBOLS_STAGING_DIR}")
     endif (USE_BUGSPLAT)
 elseif (DARWIN)
-    target_link_libraries(llwebrtc PRIVATE ll::webrtc)
+    target_link_libraries(llwebrtc PRIVATE ll::webrtc
+                                   "-framework AVFoundation"
+                                   "-framework AudioToolbox"
+                                   "-framework CoreAudio"
+                                   "-framework CoreMedia"
+                                   "-framework CoreVideo"
+                                   "-framework Foundation"
+                                   "-framework Security"
+    )
     if (USE_BUGSPLAT)
         set_target_properties(llwebrtc PROPERTIES XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf-with-dsym"
                                                   XCODE_ATTRIBUTE_DWARF_DSYM_FOLDER_PATH "${SYMBOLS_STAGING_DIR}/dSYMs")
@@ -65,6 +70,8 @@ target_include_directories( llwebrtc INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 if (WINDOWS)
     set_property(TARGET llwebrtc PROPERTY
         MSVC_RUNTIME_LIBRARY "MultiThreadedDebug")
+else()
+    target_compile_options(llwebrtc PRIVATE -Wno-deprecated-declarations) # webrtc::CreateAudioDeviceWithDataObserver is deprecated
 endif (WINDOWS)
 
 ADD_CUSTOM_COMMAND(TARGET llwebrtc POST_BUILD

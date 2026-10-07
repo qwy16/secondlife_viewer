@@ -41,8 +41,13 @@ public:
     virtual bool handleMouseDown(LLWindow *window,  LLCoordGL pos, MASK mask);
     virtual bool handleMouseUp(LLWindow *window,  LLCoordGL pos, MASK mask);
     virtual void handleMouseLeave(LLWindow *window);
+    // Called before close request is processed (ex: to create marker file in case OS is about to kill app).
+    virtual void handlePreCloseRequest();
+    virtual void handleCloseRequestCanceled();
+    virtual void handleSuspendRequest();
     // return true to allow window to close, which will then cause handleQuit to be called
-    virtual bool handleCloseRequest(LLWindow *window);
+    virtual bool handleCloseRequest(LLWindow *window, bool from_user);
+    virtual bool handleSessionExit(LLWindow* window);
     // window is about to be destroyed, clean up your business
     virtual void handleQuit(LLWindow *window);
     virtual bool handleRightMouseDown(LLWindow *window,  LLCoordGL pos, MASK mask);
@@ -58,16 +63,19 @@ public:
     virtual void handleScrollWheel(LLWindow *window,  S32 clicks);
     virtual void handleScrollHWheel(LLWindow *window,  S32 clicks);
     virtual void handleResize(LLWindow *window,  S32 width,  S32 height);
+    virtual void handleRequestResolutionUpdate(LLWindow* window);
     virtual void handleFocus(LLWindow *window);
     virtual void handleFocusLost(LLWindow *window);
     virtual void handleMenuSelect(LLWindow *window,  S32 menu_item);
     virtual bool handlePaint(LLWindow *window,  S32 x,  S32 y,  S32 width,  S32 height);
-    virtual bool handleDoubleClick(LLWindow *window,  LLCoordGL pos, MASK mask);            // double-click of left mouse button
+    virtual bool handleLeftMouseDoubleClick(LLWindow *window,  LLCoordGL pos, MASK mask);
+    virtual bool handleRightMouseDoubleClick(LLWindow* window, LLCoordGL pos, MASK mask);
+    virtual bool handleMiddleMouseDoubleClick(LLWindow* window, LLCoordGL pos, MASK mask);
     virtual void handleWindowBlock(LLWindow *window);                           // window is taking over CPU for a while
     virtual void handleWindowUnblock(LLWindow *window);                         // window coming back after taking over CPU for a while
     virtual void handleDataCopy(LLWindow *window, S32 data_type, void *data);
     virtual bool handleTimerEvent(LLWindow *window);
-    virtual bool handleDeviceChange(LLWindow *window);
+    virtual bool handleDeviceChange(LLWindow *window, const std::string& change_type);
     virtual bool handleDPIChanged(LLWindow *window, F32 ui_scale_factor, S32 window_width, S32 window_height);
     virtual bool handleDisplayChanged();
     virtual bool handleWindowDidChangeScreen(LLWindow *window);

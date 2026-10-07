@@ -54,6 +54,7 @@ public:
         U32 groupPerms,
         U32 everyonePerms,
         S32 expectedCost,
+        const LLUUID &destFolderId = LLUUID::null,
         bool showInventory = true);
 
     virtual ~LLResourceUploadInfo()
@@ -104,6 +105,7 @@ protected:
         U32 groupPerms,
         U32 everyonePerms,
         S32 expectedCost,
+        const LLUUID& destFolderId = LLUUID::null,
         bool showInventory = true);
 
     LLResourceUploadInfo(
@@ -155,6 +157,7 @@ public:
         U32 groupPerms,
         U32 everyonePerms,
         S32 expectedCost,
+        const LLUUID &destFolderId = LLUUID::null,
         bool show_inventory = true);
 
     virtual LLSD        prepareUpload();
@@ -193,6 +196,7 @@ public:
         U32 groupPerms,
         U32 everyonePerms,
         S32 expectedCost,
+        const LLUUID& destFolderId, // use null for default
         bool show_inventory,
         uploadFinish_f finish,
         uploadFailure_f failure);
@@ -219,6 +223,7 @@ public:
     typedef std::function<void(LLUUID itemId, LLUUID taskId, LLUUID newAssetId, LLSD response)> taskUploadFinish_f;
     typedef std::function<bool(LLUUID itemId, LLUUID taskId, LLSD response, std::string reason)> uploadFailed_f;
 
+    // destFolderId is the folder to put the new item in, leave null for default
     LLBufferedAssetUploadInfo(LLUUID itemId, LLAssetType::EType assetType, std::string buffer, invnUploadFinish_f finish, uploadFailed_f failed);
     LLBufferedAssetUploadInfo(LLUUID itemId, LLPointer<LLImageFormatted> image, invnUploadFinish_f finish);
     LLBufferedAssetUploadInfo(LLUUID taskId, LLUUID itemId, LLAssetType::EType assetType, std::string buffer, taskUploadFinish_f finish, uploadFailed_f failed);
@@ -251,25 +256,19 @@ private:
 class LLScriptAssetUpload : public LLBufferedAssetUploadInfo
 {
 public:
-    enum TargetType_t
-    {
-        LSL2,
-        MONO
-    };
-
-    LLScriptAssetUpload(LLUUID itemId, std::string buffer, invnUploadFinish_f finish, uploadFailed_f failed);
-    LLScriptAssetUpload(LLUUID taskId, LLUUID itemId, TargetType_t targetType,
+    LLScriptAssetUpload(LLUUID itemId, std::string compileTarget, std::string buffer, invnUploadFinish_f finish, uploadFailed_f failed);
+    LLScriptAssetUpload(LLUUID taskId, LLUUID itemId, std::string compileTarget,
             bool isRunning, LLUUID exerienceId, std::string buffer, taskUploadFinish_f finish, uploadFailed_f failed);
 
     virtual LLSD        generatePostBody();
 
     LLUUID              getExerienceId() const { return mExerienceId; }
-    TargetType_t        getTargetType() const { return mTargetType; }
+    const std::string&  getCompileTarget() const { return mCompileTarget; }
     bool                getIsRunning() const { return mIsRunning; }
 
 private:
     LLUUID              mExerienceId;
-    TargetType_t        mTargetType;
+    std::string         mCompileTarget;
     bool                mIsRunning;
 
 };

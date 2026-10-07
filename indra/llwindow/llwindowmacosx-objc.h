@@ -78,6 +78,8 @@ void initMainLoop();
 void cleanupViewer();
 void handleUrl(const char* url);
 void dispatchUrl(std::string url);
+void startWatchdog(std::string_view state);
+void stopWatchdog();
 
 /* Defined in llwindowmacosx-objc.mm: */
 int createNSApp(int argc, const char **argv);
@@ -100,7 +102,6 @@ bool isCGCursorVisible();
 void hideNSCursorTillMove(bool hide);
 void requestUserAttention();
 long showAlert(std::string title, std::string text, int type);
-void setResizeMode(bool oldresize, void* glview);
 
 NSWindowRef createNSWindow(int x, int y, int width, int height);
 
@@ -111,16 +112,14 @@ void glSwapBuffers(void* context);
 CGLContextObj getCGLContextObj(GLViewRef view);
 unsigned long getVramSize(GLViewRef view);
 float getDeviceUnitSize(GLViewRef view);
-CGPoint getContentViewBoundsPosition(NSWindowRef window);
-CGSize getContentViewBoundsSize(NSWindowRef window);
-CGSize getDeviceContentViewSize(NSWindowRef window, GLViewRef view);
+CGRect getContentViewRect(NSWindowRef window);
+CGRect getBackingViewRect(NSWindowRef window, GLViewRef view);
 void getWindowSize(NSWindowRef window, float* size);
 void setWindowSize(NSWindowRef window, int width, int height);
 void getCursorPos(NSWindowRef window, float* pos);
 void makeWindowOrderFront(NSWindowRef window);
 void convertScreenToWindow(NSWindowRef window, float *coord);
 void convertWindowToScreen(NSWindowRef window, float *coord);
-void convertScreenToView(NSWindowRef window, float *coord);
 void convertRectToScreen(NSWindowRef window, float *coord);
 void convertRectFromScreen(NSWindowRef window, float *coord);
 void setWindowPos(NSWindowRef window, float* pos);
@@ -139,8 +138,11 @@ void callRightMouseDown(float *pos, unsigned int mask);
 void callRightMouseUp(float *pos, unsigned int mask);
 void callLeftMouseDown(float *pos, unsigned int mask);
 void callLeftMouseUp(float *pos, unsigned int mask);
-void callDoubleClick(float *pos, unsigned int mask);
+void callLeftDoubleClick(float *pos, unsigned int mask);
+void callRightDoubleClick(float *pos, unsigned int mask);
+void callMiddleDoubleClick(float *pos, unsigned int mask);
 void callResize(unsigned int width, unsigned int height);
+void callRequestResolutionUpdate();
 void callMouseMoved(float *pos, unsigned int mask);
 void callMouseDragged(float *pos, unsigned int mask);
 void callScrollMoved(float deltaX, float deltaY);
@@ -158,6 +160,7 @@ void callFocusLost();
 void callModifier(unsigned int mask);
 void callQuitHandler();
 void commitCurrentPreedit(GLViewRef glView);
+bool windowCallbacksReady();
 
 #include <string>
 void callHandleDragEntered(std::string url);

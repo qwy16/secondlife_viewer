@@ -2,7 +2,7 @@
 <llsd xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
   xsi:noNamespaceSchemaLocation="llsd.xsd">
 <map>
-  <key>ImporterDebug</key>
+  <key>ImporterDebugVerboseLogging</key>
   <map>
     <key>Comment</key>
     <string>Enable debug output to more precisely identify sources of import errors. Warning: the output can slow down import on many machines.</string>
@@ -27,13 +27,24 @@
   <key>ImporterModelLimit</key>
   <map>
     <key>Comment</key>
-    <string>Limits amount of importer generated models for dae files</string>
+    <string>Limits amount of importer generated (when over 8 faces) models for dae and gltf files</string>
     <key>Persist</key>
     <integer>1</integer>
     <key>Type</key>
     <string>U32</string>
     <key>Value</key>
     <integer>768</integer>
+  </map>
+  <key>ImporterDebugMode</key>
+  <map>
+    <key>Comment</key>
+    <string>At 0 does nothing, at 1 dumps skinning data near orifinal file, at 2 dumps skining data and positions/weights of first 5 models, at 3 dumps skinning data and models as llsd</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>U32</string>
+    <key>Value</key>
+    <integer>0</integer>
   </map>
   <key>ImporterPreprocessDAE</key>
   <map>
@@ -91,7 +102,7 @@
       <key>Type</key>
       <string>S32</string>
       <key>Value</key>
-      <real>300.0</real>
+      <real>300</real>
     </map>
     <key>AckCollectTime</key>
     <map>
@@ -478,6 +489,17 @@
       <key>Value</key>
       <integer>1</integer>
     </map>
+    <key>RecentJumpThresholdSecs</key>
+    <map>
+      <key>Comment</key>
+      <string>Seconds after jump input during which landing finish-anim is suppressed to avoid interrupting rapid successive jumps.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
     <key>AvatarAxisDeadZone0</key>
     <map>
       <key>Comment</key>
@@ -621,16 +643,16 @@
       <key>Value</key>
       <real>16.0</real>
     </map>
-    <key>AvatarPickerURL</key>
+    <key>AvatarWelcomePack</key>
     <map>
-      <key>Comment</key>
-      <string>Avatar picker contents</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>String</string>
-      <key>Value</key>
-      <string>http://lecs-viewer-web-components.s3.amazonaws.com/v3.0/[GRID_LOWERCASE]/avatars.html</string>
+        <key>Comment</key>
+        <string>Avatar Welcome Pack contents</string>
+        <key>Persist</key>
+        <integer>1</integer>
+        <key>Type</key>
+        <string>String</string>
+        <key>Value</key>
+        <string>https://lecs-viewer-web-components.s3.amazonaws.com/v3.0/[GRID_LOWERCASE]/vawp/index.html</string>
     </map>
     <!--AvatarBakedTextureUploadTimeout is in use by QA-->
     <key>AvatarBakedTextureUploadTimeout</key>
@@ -643,6 +665,28 @@
         <string>U32</string>
         <key>Value</key>
         <integer>60</integer>
+    </map>
+    <key>AvatarRotateThresholdSlow</key>
+    <map>
+      <key>Comment</key>
+      <string>Angle between avatar facing and camera facing at which avatar turns to face same direction as camera, when moving slowly (degrees)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <integer>60</integer>
+    </map>
+    <key>AvatarRotateThresholdFast</key>
+    <map>
+      <key>Comment</key>
+      <string>Angle between avatar facing and camera facing at which avatar turns to face same direction as camera, when moving fast (degrees)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <integer>2</integer>
     </map>
     <key>AvatarPhysics</key>
     <map>
@@ -1128,6 +1172,28 @@
         <key>Value</key>
         <integer>1</integer>
     </map>
+    <key>BuyCurrencyHTML</key>
+    <map>
+      <key>Comment</key>
+      <string>Use HTML based L$ packs floater instead of legacy XUI version</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>BuyCurrencyPacksURL</key>
+    <map>
+      <key>Comment</key>
+      <string>URL for the L$ packs purchase floater</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>String</string>
+      <key>Value</key>
+      <string>https://accounts.secondlife.com/packs/floater?lang=[LANGUAGE]&amp;shortfall=[SHORTFALL]</string>
+    </map>
     <key>EnableButtonFlashing</key>
     <map>
       <key>Comment</key>
@@ -1138,6 +1204,39 @@
       <string>Boolean</string>
       <key>Value</key>
       <integer>1</integer>
+    </map>
+    <key>EnableDiscord</key>
+    <map>
+      <key>Comment</key>
+      <string>When set, connect to Discord to enable Rich Presence</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>ShowDiscordActivityDetails</key>
+    <map>
+      <key>Comment</key>
+      <string>When set, show avatar name on Discord Rich Presence</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>ShowDiscordActivityState</key>
+    <map>
+      <key>Comment</key>
+      <string>When set, show location on Discord Rich Presence</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
     </map>
     <key>EnableDiskCacheDebugInfo</key>
     <map>
@@ -1153,13 +1252,13 @@
     <key>DiskCachePercentOfTotal</key>
     <map>
       <key>Comment</key>
-      <string>The percent of total cache size (defined by CacheSize) to use for the disk cache</string>
+      <string>The percent of total cache size (defined by CacheSize) to use for the disk cache (ex: asset storage, excludes textures)</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>F32</string>
       <key>Value</key>
-      <real>40.0</real>
+      <real>35.0</real>
     </map>
     <key>DiskCacheDirName</key>
     <map>
@@ -1203,7 +1302,7 @@
       <key>Type</key>
       <string>U32</string>
       <key>Value</key>
-      <integer>4096</integer>
+      <integer>6144</integer>
     </map>
     <key>CacheValidateCounter</key>
     <map>
@@ -1864,6 +1963,17 @@
     <key>Value</key>
     <integer>0</integer>
   </map>
+    <key>DebugSelectionLODs</key>
+    <map>
+        <key>Comment</key>
+        <string>Force selection to show specific LOD, -1 for off, 0 - lowest, 4 - high.</string>
+        <key>Persist</key>
+        <integer>0</integer>
+        <key>Type</key>
+        <string>S32</string>
+        <key>Value</key>
+        <integer>-1</integer>
+    </map>
   <key>AnimatedObjectsAllowLeftClick</key>
   <map>
     <key>Comment</key>
@@ -2390,7 +2500,7 @@
       <key>Type</key>
       <string>String</string>
       <key>Value</key>
-      <string>http://lecs-viewer-web-components.s3.amazonaws.com/v3.0/[GRID_LOWERCASE]/guide.html</string>
+      <string>https://secondlife.com/destinations/whats-hot-now?ctx=viewer</string>
     </map>
   <key>DisableCameraConstraints</key>
     <map>
@@ -2414,16 +2524,16 @@
       <key>Value</key>
       <integer>0</integer>
     </map>
-    <key>DisableMouseWarp</key>
+    <key>MouseWarpMode</key>
     <map>
       <key>Comment</key>
-      <string>Disable warping of the mouse to the center of the screen during alt-zoom and mouse look. Useful with certain input devices, mouse sharing programs like Synergy, or running under Parallels.</string>
+      <string>Controls warping of the mouse to the center of the screen during alt-zoom and mouse look. Useful with certain input devices, mouse sharing programs like Synergy, or running under Parallels. 0 - automatic, 1 - on, 2 - off</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
-      <string>Boolean</string>
+      <string>S32</string>
       <key>Value</key>
-      <integer>0</integer>
+      <integer>1</integer>
     </map>
     <key>DisableExternalBrowser</key>
     <map>
@@ -2698,7 +2808,7 @@
       <key>Type</key>
       <string>String</string>
       <key>Value</key>
-      <string>http://events.[GRID]/viewer/embed/event/[EVENT_ID]</string>
+      <string>https://events.[GRID]/viewer/embed/event/[EVENT_ID]</string>
     </map>
     <key>MainWorkTime</key>
     <map>
@@ -3355,18 +3465,7 @@
       <key>Type</key>
       <string>String</string>
       <key>Value</key>
-      <string>http://viewer-help.secondlife.com/[LANGUAGE]/[CHANNEL]/[VERSION]/[TOPIC][DEBUG_MODE]</string>
-    </map>
-    <key>HowToHelpURL</key>
-    <map>
-      <key>Comment</key>
-      <string>URL for How To help content</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>String</string>
-      <key>Value</key>
-      <string>http://lecs-viewer-web-components.s3.amazonaws.com/v3.0/[GRID_LOWERCASE]/howto/index.html</string>
+      <string>https://viewer-help.secondlife.com/[LANGUAGE]/[CHANNEL]/[VERSION]/[TOPIC][DEBUG_MODE]</string>
     </map>
     <key>HomeSidePanelURL</key>
     <map>
@@ -3389,17 +3488,6 @@
       <string>String</string>
       <key>Value</key>
       <string>https://search.[GRID]/viewer/?query_term=[QUERY]&amp;search_type=[TYPE][COLLECTION]&amp;maturity=[MATURITY]&amp;lang=[LANGUAGE]&amp;g=[GODLIKE]&amp;sid=[SESSION_ID]&amp;rid=[REGION_ID]&amp;pid=[PARCEL_ID]&amp;channel=[CHANNEL]&amp;version=[VERSION]&amp;major=[VERSION_MAJOR]&amp;minor=[VERSION_MINOR]&amp;patch=[VERSION_PATCH]&amp;build=[VERSION_BUILD]</string>
-    </map>
-    <key>GuidebookURL</key>
-    <map>
-      <key>Comment</key>
-      <string>URL for Guidebook content</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>String</string>
-      <key>Value</key>
-      <string>http://guidebooks.secondlife.io/welcome/index.html</string>
     </map>
     <key>HighResSnapshot</key>
     <map>
@@ -3982,7 +4070,7 @@
       <key>Type</key>
       <string>String</string>
       <key>Value</key>
-      <string>http://wiki.secondlife.com/wiki/[LSL_STRING]</string>
+      <string>https://wiki.secondlife.com/wiki/[LSL_STRING]</string>
     </map>
     <key>LSLFontSizeName</key>
     <map>
@@ -4160,7 +4248,17 @@
       <key>Value</key>
       <string>0.0.0</string>
     </map>
-
+    <key>PreviousInstallChecked</key>
+    <map>
+        <key>Comment</key>
+        <string>Whether viewer checked previous install on the same channel for NSIS</string>
+        <key>Persist</key>
+        <integer>1</integer>
+        <key>Type</key>
+        <string>Boolean</string>
+        <key>Value</key>
+        <integer>0</integer>
+    </map>
     <key>LimitDragDistance</key>
     <map>
       <key>Comment</key>
@@ -4325,7 +4423,7 @@
     <key>Type</key>
     <string>F32</string>
     <key>Value</key>
-    <real>40.0</real>
+    <real>90.0</real>
   </map>
   <key>LogMessages</key>
     <map>
@@ -4407,13 +4505,24 @@
     <key>MainloopTimeoutDefault</key>
     <map>
       <key>Comment</key>
-      <string>Timeout duration for mainloop lock detection, in seconds.</string>
+      <string>Timeout duration for mainloop lock detection during teleports, login and logout, in seconds.</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>F32</string>
       <key>Value</key>
-      <real>60.0</real>
+      <real>120.0</real>
+    </map>
+    <key>MainloopTimeoutStarted</key>
+    <map>
+        <key>Comment</key>
+        <string>Timeout duration for mainloop lock detection when logged in and not teleporting, in seconds.</string>
+        <key>Persist</key>
+        <integer>1</integer>
+        <key>Type</key>
+        <string>F32</string>
+        <key>Value</key>
+        <real>60.0</real>
     </map>
     <key>MapScale</key>
     <map>
@@ -4502,6 +4611,17 @@
       <string>Boolean</string>
       <key>Value</key>
       <integer>1</integer>
+    </map>
+    <key>MapShowGridCoords</key>
+    <map>
+      <key>Comment</key>
+      <string>Shows/hides the grid coordinates of each region on the world map.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
     </map>
     <key>MiniMapAutoCenter</key>
     <map>
@@ -4991,6 +5111,28 @@
   <map>
     <key>Comment</key>
     <string>Turn on debugging messages that may help diagnosing media issues (WARNING: May reduce performance).</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>0</integer>
+  </map>
+  <key>MediaPluginPipeWireVolumeCatcher</key>
+  <map>
+    <key>Comment</key>
+    <string>Use PipeWire instead of PulseAudio for controlling web media volume.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>1</integer>
+  </map>
+  <key>MediaPluginForceVLC</key>
+  <map>
+    <key>Comment</key>
+    <string>Force use of VLC based media plugin. (Linux Only)</string>
     <key>Persist</key>
     <integer>1</integer>
     <key>Type</key>
@@ -5774,6 +5916,17 @@
       <key>Value</key>
       <integer>90</integer>
     </map>
+    <key>ScriptToastButtonWidth</key>
+    <map>
+      <key>Comment</key>
+      <string>Default width of buttons in the Script dialog toast.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>S32</string>
+      <key>Value</key>
+      <integer>127</integer>
+    </map>
     <key>NotificationChannelRightMargin</key>
     <map>
       <key>Comment</key>
@@ -6004,6 +6157,39 @@
       <string>Boolean</string>
       <key>Value</key>
       <integer>0</integer>
+    </map>
+    <key>OpenDebugStatVoice</key>
+    <map>
+      <key>Comment</key>
+      <string>Expand Voice (WebRTC) stats display</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>OpenDebugStatVoiceOutgoing</key>
+    <map>
+      <key>Comment</key>
+      <string>Expand Outgoing audio (Voice) stats display</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>OpenDebugStatVoiceIncoming</key>
+    <map>
+      <key>Comment</key>
+      <string>Expand Incoming audio (Voice) stats display</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
     </map>
     <key>OutBandwidth</key>
     <map>
@@ -7018,7 +7204,7 @@
     <key>QuickBuyCurrency</key>
     <map>
       <key>Comment</key>
-      <string>Toggle between HTML based currency purchase floater and legacy XUI version</string>
+      <string>(Deprecated) Use BuyCurrencyHTML instead</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -7164,13 +7350,24 @@
     <key>RenderAnisotropic</key>
     <map>
       <key>Comment</key>
-      <string>Render textures using anisotropic filtering</string>
+      <string>[OBSOLETE] Render textures using anisotropic filtering</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>Boolean</string>
       <key>Value</key>
       <integer>0</integer>
+    </map>
+    <key>RenderAnisotropicLevel</key>
+    <map>
+      <key>Comment</key>
+      <string>Anisotropic filtering strength(0(Disable), 2x, 4x, 8x, 16x</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <real>0</real>
     </map>
     <key>RenderAppleUseMultGL</key>
     <map>
@@ -7208,7 +7405,7 @@
   <key>RenderAvatarCloth</key>
     <map>
       <key>Comment</key>
-      <string>DEPRECATED - only false supported - Controls if avatars use wavy cloth</string>
+      <string>Controls if system avatar clothes use wavy cloth</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -7247,7 +7444,7 @@
     <key>Type</key>
     <string>F32</string>
     <key>Value</key>
-    <real>32.0</real>
+    <real>48.0</real>
   </map>
   <key>RenderCPUBasis</key>
   <map>
@@ -7388,7 +7585,7 @@
    <key>RenderHiDPI</key>
   <map>
     <key>Comment</key>
-    <string>Enable support for HiDPI displays, like Retina (macOS ONLY, requires restart)</string>
+    <string>Enable support for HiDPI displays, like Retina (macOS and Linux ONLY, requires restart)</string>
     <key>Persist</key>
     <integer>1</integer>
     <key>Type</key>
@@ -7808,7 +8005,7 @@
   <key>RenderMaxOpenGLVersion</key>
   <map>
     <key>Comment</key>
-    <string>Maximum OpenGL version to attempt use (minimum 3.1 maximum 4.6).  Requires restart.</string>
+    <string>Maximum OpenGL version to attempt use (minimum 3.1 maximum 4.6).  Requires restart. Windows only.</string>
     <key>Persist</key>
     <integer>1</integer>
     <key>Type</key>
@@ -8899,6 +9096,17 @@
         <key>Value</key>
         <integer>0</integer>
     </map>
+    <key>NametagOverWater</key>
+    <map>
+        <key>Comment</key>
+        <string>Render name tag over the transparent water while camera is above the water</string>
+        <key>Persist</key>
+        <integer>1</integer>
+        <key>Type</key>
+        <string>Boolean</string>
+        <key>Value</key>
+        <integer>1</integer>
+    </map>
     <key>RenderInitError</key>
     <map>
       <key>Comment</key>
@@ -8965,6 +9173,17 @@
     <key>Value</key>
     <integer>16</integer>
   </map>
+    <key>RenderReflectionProbeShowTransparent</key>
+    <map>
+        <key>Comment</key>
+        <string>Show reflection probes in the transparency debug view</string>
+        <key>Persist</key>
+        <integer>0</integer>
+        <key>Type</key>
+        <string>Boolean</string>
+        <key>Value</key>
+        <integer>1</integer>
+    </map>
     <key>RenderReflectionProbeVolumes</key>
     <map>
       <key>Comment</key>
@@ -9056,7 +9275,7 @@
     <key>RenderQualityPerformance</key>
     <map>
       <key>Comment</key>
-      <string>Which graphics settings you've chosen</string>
+      <string>Which graphics settings you've chosen. Don't use this setting to change quality directly from debug settings.</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -9064,7 +9283,18 @@
       <key>Value</key>
       <integer>1</integer>
     </map>
-  
+    <key>DebugQualityPerformance</key>
+    <map>
+        <key>Comment</key>
+        <string>Allows to change performance quality directly from debug settings.</string>
+        <key>Persist</key>
+        <integer>1</integer>
+        <key>Type</key>
+        <string>U32</string>
+        <key>Value</key>
+        <integer>1</integer>
+    </map>
+
   <key>RenderReflectionDetail</key>
     <map>
       <key>Comment</key>
@@ -9595,6 +9825,17 @@
       <key>Value</key>
       <integer>1</integer>
     </map>
+    <key>ObscureBalanceInStatusBar</key>
+    <map>
+        <key>Comment</key>
+        <string>If true, balance will be shows as '*'</string>
+        <key>Persist</key>
+        <integer>1</integer>
+        <key>Type</key>
+        <string>Boolean</string>
+        <key>Value</key>
+        <integer>0</integer>
+    </map>
     <key>RenderUIBuffer</key>
     <map>
       <key>Comment</key>
@@ -9700,6 +9941,17 @@
   <map>
     <key>Comment</key>
     <string>When enabled some UI elements with cache buffers generated by fonts and reuse them. When disabled general cahce will be used with a significant overhead for hash, but it regenerates vertices each frame so it's always up to date.</string>
+    <key>Persist</key>
+    <integer>0</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <real>1</real>
+  </map>
+  <key>CollectUIImageVertexBuffers</key>
+  <map>
+    <key>Comment</key>
+    <string>When enabled, images will cache vertex buffers and reuse them. When disabled, the general cache will be used with significant hash-lookup overhead, but vertices are regenerated each frame so they are always up to date.</string>
     <key>Persist</key>
     <integer>0</integer>
     <key>Type</key>
@@ -10008,6 +10260,17 @@
         <key>Value</key>
         <integer>1</integer>
     </map>
+    <key>RenderHighPrecisionPostProcess</key>
+    <map>
+        <key>Comment</key>
+        <string>Use 16-bit floating point buffers for post process rendering</string>
+        <key>Persist</key>
+        <integer>1</integer>
+        <key>Type</key>
+        <string>Boolean</string>
+        <key>Value</key>
+        <integer>0</integer>
+    </map>
     <key>ReplaySession</key>
     <map>
       <key>Comment</key>
@@ -10264,13 +10527,13 @@
   <key>SceneLoadRearMaxRadiusFraction</key>
   <map>
     <key>Comment</key>
-    <string>a percentage of draw distance beyond which all objects outside of view frustum will be unloaded, regardless of pixel threshold</string>
+    <string>a fraction of draw distance beyond which all objects outside of view frustum will be unloaded, regardless of pixel threshold</string>
     <key>Persist</key>
     <integer>1</integer>
     <key>Type</key>
     <string>F32</string>
     <key>Value</key>
-    <real>75.0</real>
+    <real>0.75</real>
   </map>
     <key>SceneLoadRearPixelThreshold</key>
     <map>
@@ -10502,6 +10765,17 @@
       <string>S32</string>
       <key>Value</key>
       <integer>1</integer>
+    </map>
+    <key>GroupTitlesTagMode</key>
+    <map>
+      <key>Comment</key>
+      <string>Select Group Titles tag mode: 0 - no group tags, 1 - only my group tag, 2 - all group tags</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>S32</string>
+      <key>Value</key>
+      <integer>2</integer>
     </map>
     <key>ShowAxes</key>
     <map>
@@ -10965,6 +11239,17 @@
       <key>Value</key>
       <integer>1</integer>
     </map>
+    <key>ShowBlockedConvHistory</key>
+    <map>
+      <key>Comment</key>
+      <string>Specifies whether blocked agents will be shown in Call Log</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
     <key>ShowMatureEvents</key>
     <map>
       <key>Comment</key>
@@ -11030,6 +11315,45 @@
       <key>Value</key>
       <integer>0</integer>
     </map>
+    <key>ShowPGClassifieds</key>
+    <map>
+      <key>Comment</key>
+      <string>Display results of find classifieds that are flagged as general</string>
+      <key>Persist</key>
+      <integer>1</integer>
+	  <key>HideFromEditor</key>
+	  <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>ShowMatureClassifieds</key>
+    <map>
+      <key>Comment</key>
+      <string>Display results of find classifieds that are flagged as moderate</string>
+      <key>Persist</key>
+      <integer>1</integer>
+	  <key>HideFromEditor</key>
+	  <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>ShowAdultClassifieds</key>
+    <map>
+      <key>Comment</key>
+      <string>Display results of find classifieds that are flagged as adult</string>
+      <key>Persist</key>
+      <integer>1</integer>
+	  <key>HideFromEditor</key>
+	  <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
     <key>ShowPGSims</key>
     <map>
       <key>Comment</key>
@@ -11068,6 +11392,54 @@
       <string>Boolean</string>
       <key>Value</key>
       <integer>0</integer>
+    </map>
+    <key>ShowPGEvents</key>
+    <map>
+      <key>Comment</key>
+      <string>Display results of find events that are flagged as general</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>HideFromEditor</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>ShowMatureGroups</key>
+    <map>
+      <key>Comment</key>
+      <string>Include groups that are flagged as mature to Search results</string>
+      <key>Persist</key>
+      <integer>1</integer>
+	  <key>HideFromEditor</key>
+	  <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>FindLandArea</key>
+    <map>
+      <key>Comment</key>
+      <string>Enables filtering of land search results by area</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>FindLandPrice</key>
+    <map>
+      <key>Comment</key>
+      <string>Enables filtering of land search results by price</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
     </map>
     <key>ShowNearClip</key>
     <map>
@@ -11487,6 +11859,28 @@
       <string>String</string>
       <key>Value</key>
       <string>fss.txt</string>
+    </map>
+    <key>StatsFrametimeSampleSeconds</key>
+    <map>
+        <key>Comment</key>
+        <string>The number of seconds to sample extended frametime data (percentiles, stddev).</string>
+        <key>Persist</key>
+        <integer>1</integer>
+        <key>Type</key>
+        <string>S32</string>
+        <key>Value</key>
+        <integer>5</integer>
+    </map>
+    <key>StatsFrametimeEventThreshold</key>
+    <map>
+        <key>Comment</key>
+        <string>The percentage that the frametime difference must exceed in order to register a frametime event. 0.1 = 10%, 0.25 = 25%, etc.</string>
+        <key>Persist</key>
+        <integer>1</integer>
+        <key>Type</key>
+        <string>F32</string>
+        <key>Value</key>
+        <real>0.1</real>
     </map>
     <key>SystemLanguage</key>
     <map>
@@ -12031,17 +12425,6 @@
       <string>Boolean</string>
       <key>Value</key>
       <integer>0</integer>
-    </map>
-    <key>UIFloaterTitleVPad</key>
-    <map>
-      <key>Comment</key>
-      <string>Distance from top of floater to top of title string, pixels</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>S32</string>
-      <key>Value</key>
-      <real>7</real>
     </map>
     <key>UIImgDefaultEyesUUID</key>
     <map>
@@ -12827,11 +13210,11 @@
     <key>UpdaterShowReleaseNotes</key>
     <map>
         <key>Comment</key>
-        <string>Enables displaying of the Release notes in a web floater after update.</string>
+        <string>Enables displaying of the Release notes in a web floater after update. 0 - don't show, 1 - show, 2 - show even for test viewers</string>
         <key>Persist</key>
         <integer>1</integer>
         <key>Type</key>
-        <string>Boolean</string>
+        <string>S32</string>
         <key>Value</key>
         <integer>1</integer>
     </map>
@@ -12948,9 +13331,9 @@
     <key>Use24HourClock</key>
     <map>
         <key>Comment</key>
-        <string>12 vs 24. At the moment only for region restart schedule floater</string>
+        <string>12 vs 24. At the moment coverage is partial</string>
         <key>Persist</key>
-        <integer>0</integer>
+        <integer>1</integer>
         <key>Type</key>
         <string>Boolean</string>
         <key>Value</key>
@@ -12966,6 +13349,17 @@
       <string>Boolean</string>
       <key>Value</key>
       <integer>0</integer>
+    </map>
+    <key>SwitchToSharedEnvAfterTeleport</key>
+    <map>
+      <key>Comment</key>
+      <string>Switch to Shared Environment after teleport</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
     </map>
     <key>PreferredBrowserBehavior</key>
     <map>
@@ -13209,141 +13603,8 @@
       <key>Value</key>
       <integer>1</integer>
     </map>
-    <key>VivoxAutoPostCrashDumps</key>
-    <map>
-      <key>Comment</key>
-      <string>If true, SLVoice will automatically send crash dumps directly to Vivox.</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>Boolean</string>
-      <key>Value</key>
-      <integer>1</integer>
-    </map>
-    <key>VivoxDebugLevel</key>
-    <map>
-      <key>Comment</key>
-      <string>Logging level to use when launching the vivox daemon</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>String</string>
-      <key>Value</key>
-      <string>0</string>
-    </map>
-    <key>VivoxLogDirectory</key>
-    <map>
-        <key>Comment</key>
-        <string>Default log path is Application Support/SecondLife/logs specify alternate absolute path here.</string>
-        <key>Persist</key>
-        <integer>1</integer>
-        <key>Type</key>
-        <string>String</string>
-        <key>Value</key>
-        <string></string>
-    </map>
-    <key>VivoxShutdownTimeout</key>
-    <map>
-      <key>Comment</key>
-      <string>shutdown timeout in miliseconds.  The amount of time to wait for the service to shutdown gracefully after the last disconnect</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>String</string>
-      <key>Value</key>
-      <string>5</string>
-    </map>
-    <key>VivoxDebugSIPURIHostName</key>
-    <map>
-      <key>Comment</key>
-      <string>Hostname portion of vivox SIP URIs (empty string for the default).</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>String</string>
-      <key>Value</key>
-      <string></string>
-    </map>
-    <key>VivoxDebugVoiceAccountServerURI</key>
-    <map>
-      <key>Comment</key>
-      <string>URI to the vivox account management server (empty string for the default).</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>String</string>
-      <key>Value</key>
-      <string></string>
-    </map>
-    <key>VivoxVoiceHost</key>
-    <map>
-      <key>Comment</key>
-      <string>Client SLVoice host to connect to</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>String</string>
-      <key>Value</key>
-      <string>127.0.0.1</string>
-    </map>
-    <key>VivoxVoicePort</key>
-    <map>
-      <key>Comment</key>
-      <string>Client SLVoice port to connect to</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>U32</string>
-      <key>Value</key>
-      <integer>44125</integer>
-    </map>
-
-  <key>VivoxVadAuto</key>
-  <map>
-    <key>Comment</key>
-    <string>A flag indicating if the automatic VAD is enabled (1) or disabled (0). The individual settings are ignored if the auto-mode is enabled</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>U32</string>
-    <key>Value</key>
-    <integer>0</integer>
-  </map>
-  <key>VivoxVadHangover</key>
-  <map>
-    <key>Comment</key>
-    <string>The time (in milliseconds) that it takes or the VAD to switch back to silence from speech mode after the last speech frame has been detected</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>U32</string>
-    <key>Value</key>
-    <integer>2000</integer>
-  </map>
-  <key>VivoxVadNoiseFloor</key>
-  <map>
-    <key>Comment</key>
-    <string>A dimensionless value between 0 and 20000 (default 576) that controls the maximum level at which the noise floor may be set at by the VAD's noise tracking</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>U32</string>
-    <key>Value</key>
-    <integer>576</integer>
-  </map>
-  <key>VivoxVadSensitivity</key>
-  <map>
-    <key>Comment</key>
-    <string>A dimensionless value between 0 and 100, indicating the 'sensitivity of the VAD'. Increasing this value corresponds to decreasing the sensitivity of the VAD and 0 is turned off altogether</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>U32</string>
-    <key>Value</key>
-    <integer>0</integer>
-  </map>
-  <key>VoiceCallsFriendsOnly</key>
-  <!-- deprecated (see SL-12871) -->
+    <key>VoiceCallsFriendsOnly</key>
+    <!-- deprecated (see SL-12871) -->
     <map>
       <key>Comment</key>
       <string>(Deprecated) Only accept voice calls from residents on your friends list</string>
@@ -13419,17 +13680,6 @@
       <string>S32</string>
       <key>Value</key>
       <integer>0</integer>
-    </map>
-    <key>VoiceHost</key>
-    <map>
-      <key>Comment</key>
-      <string>Client SLVoice host to connect to</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>String</string>
-      <key>Value</key>
-      <string>127.0.0.1</string>
     </map>
     <key>VoiceImageLevel0</key>
     <map>
@@ -13519,17 +13769,6 @@
       <key>Value</key>
       <string>Default</string>
     </map>
-    <key>VoiceLogFile</key>
-    <map>
-      <key>Comment</key>
-      <string>Log file to use when launching the voice daemon</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>String</string>
-      <key>Value</key>
-      <string></string>
-    </map>
     <key>VoiceOutputAudioDevice</key>
     <map>
       <key>Comment</key>
@@ -13551,17 +13790,6 @@
       <string>S32</string>
       <key>Value</key>
       <integer>10</integer>
-    </map>
-    <key>VoicePort</key>
-    <map>
-      <key>Comment</key>
-      <string>Client SLVoice port to connect to</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>U32</string>
-      <key>Value</key>
-      <integer>44125</integer>
     </map>
     <key>VoiceEchoCancellation</key>
     <map>
@@ -13632,7 +13860,7 @@
     <key>WLSkyDetail</key>
     <map>
       <key>Comment</key>
-      <string>Controls vertex detail on the WindLight sky.  Lower numbers will give better performance and uglier skies.</string>
+      <string>[OBSOLETE]</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -13643,7 +13871,7 @@
     <key>WatchdogEnabled</key>
     <map>
       <key>Comment</key>
-      <string>Controls whether the thread watchdog timer is activated. Value is boolean. Set to -1 to defer to built-in default.</string>
+      <string>Controls whether the thread watchdog timer is activated. Value is S32. Set to -1 to defer to built-in default.</string>
       <key>Persist</key>
       <integer>0</integer>
       <key>Type</key>
@@ -13720,7 +13948,7 @@
     <key>FullScreen</key>
     <map>
       <key>Comment</key>
-      <string>run a fullscreen session</string>
+      <string>Run a fullscreen session. MacOS not supported</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -13826,6 +14054,61 @@
       <string>String</string>
       <key>Value</key>
       <string />
+    </map>
+    <key>ExternalWebsocketSyncEnable</key>
+    <map>
+        <key>Comment</key>
+        <string>Enables the Websocket JSONRPC server when doing external script editing.</string>
+        <key>Persist</key>
+        <integer>1</integer>
+        <key>Type</key>
+        <string>Boolean</string>
+        <key>Value</key>
+        <integer>1</integer>
+    </map>
+    <key>ExternalWebsocketSyncPort</key>
+    <map>
+        <key>Comment</key>
+        <string>Port that the JSONRPC server listens on when editing</string>
+        <key>Persist</key>
+        <integer>1</integer>
+        <key>Type</key>
+        <string>S32</string>
+        <key>Value</key>
+        <integer>9020</integer>
+    </map>
+    <key>ExternalWebsocketSyncLocal</key>
+    <map>
+        <key>Comment</key>
+        <string>Should the JSONRPC server listen only for local connections.</string>
+        <key>Persist</key>
+        <integer>1</integer>
+        <key>Type</key>
+        <string>Boolean</string>
+        <key>Value</key>
+        <integer>1</integer>
+    </map>
+    <key>ExternalEditorTightIntegration</key>
+    <map>
+        <key>Comment</key>
+        <string>When true, Edit in External Editor launches VS Code via the code CLI with a vscode:// URI instead of using the configured external editor.</string>
+        <key>Persist</key>
+        <integer>1</integer>
+        <key>Type</key>
+        <string>Boolean</string>
+        <key>Value</key>
+        <integer>0</integer>
+    </map>
+    <key>ExternalWebsocketForwardDebug</key>
+    <map>
+        <key>Comment</key>
+        <string>Forward messages and runtime errors for a script to JSONRPC client.</string>
+        <key>Persist</key>
+        <integer>1</integer>
+        <key>Type</key>
+        <string>Boolean</string>
+        <key>Value</key>
+        <integer>1</integer>
     </map>
     <key>YawFromMousePosition</key>
     <map>
@@ -14218,16 +14501,38 @@
       <key>Value</key>
       <integer>1</integer>
     </map>
-    <key>OutfitGallerySortByName</key>
+    <key>OutfitGallerySortOrder</key>
     <map>
       <key>Comment</key>
-      <string>Always sort outfits by name in Outfit Gallery</string>
+      <string>Gallery sorting: 0 - sort outfits by name, 1 - images frst, 2 - favorites first</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>S32</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>OutfitListSortOrder</key>
+    <map>
+      <key>Comment</key>
+      <string>How outfit list in Avatar's floater is sorted. 0 - by name 1 - favorites to top</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>S32</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>OutfitListFilterFullList</key>
+    <map>
+      <key>Comment</key>
+      <string> 0 - show only matches. 1 - show all items in outfit as long as outfit or item inside matches.</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>Boolean</string>
       <key>Value</key>
-      <integer>0</integer>
+      <integer>1</integer>
     </map>
     <key>OutfitOperationsTimeout</key>
     <map>
@@ -14239,6 +14544,17 @@
       <string>S32</string>
       <key>Value</key>
       <integer>180</integer>
+    </map>
+    <key>OSHibernationMode</key>
+    <map>
+        <key>Comment</key>
+        <string>Whether to prevent OS from hibernating. 0 - can hibernate; 1 - can't hibernate, can turn screen off; 2 - can't hibernate, can't turn screen off </string>
+        <key>Persist</key>
+        <integer>1</integer>
+        <key>Type</key>
+        <string>S32</string>
+        <key>Value</key>
+        <integer>0</integer>
     </map>
     <key>HeightUnits</key>
     <map>
@@ -14458,7 +14774,7 @@
       <key>Type</key>
       <string>String</string>
       <key>Value</key>
-      <string>http://common-flash-secondlife-com.s3.amazonaws.com/viewer/v2.6/agni/404.html</string>
+      <string>https://common-flash-secondlife-com.s3.amazonaws.com/viewer/v2.6/agni/404.html</string>
     </map>
     <key>OpenIMOnVoice</key>
     <map>
@@ -15959,6 +16275,17 @@
       <key>Value</key>
       <integer>0</integer>
     </map>
+    <key>CEFRemoteDebuggingPort</key>
+    <map>
+      <key>Comment</key>
+      <string>Enable CEF remote debugging on the specified base port (1024 to 65535, 0 to disable). Each new SLPlugin gets base+N.</string>
+      <key>Persist</key>
+      <integer>0</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
   <key>360CaptureJPEGEncodeQuality</key>
   <map>
     <key>Comment</key>
@@ -16102,6 +16429,83 @@
     <key>Value</key>
     <integer>0</integer>
   </map>
+  <key>InventoryFavoritesUseStar</key>
+  <map>
+    <key>Comment</key>
+    <string>Show star near favorited items in inventory</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>1</integer>
+  </map>
+  <key>InventoryFavoritesUseHollowStar</key>
+  <map>
+    <key>Comment</key>
+    <string>Show star near folders that contain favorites</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>1</integer>
+  </map>
+  <key>InventoryFavoritesColorText</key>
+  <map>
+    <key>Comment</key>
+    <string>render favorite items using InventoryFavoriteText as color</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>1</integer>
+  </map>
+  <key>InventoryAddAttachmentBehavior</key>
+  <map>
+    <key>Comment</key>
+    <string>Defines behavior when hitting return on an inventory item</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>U32</string>
+    <key>Value</key>
+    <integer>0</integer>
+  </map>
+  <key>InventoryShowRecentTab</key>
+  <map>
+    <key>Comment</key>
+    <string>Show/hide Recent tab in the Inventory floater</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>1</integer>
+  </map>
+  <key>InventoryShowWornTab</key>
+  <map>
+    <key>Comment</key>
+    <string>Show/hide Worn tab in the Inventory floater</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>1</integer>
+  </map>
+  <key>InventoryShowFavoritesTab</key>
+  <map>
+    <key>Comment</key>
+    <string>Show/hide Favorites tab in the Inventory floater</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>1</integer>
+  </map>
   <key>StatsReportMaxDuration</key>
   <map>
     <key>Comment</key>
@@ -16204,13 +16608,79 @@
     <key>MediaFirstClickInteract</key>
     <map>
       <key>Comment</key>
-      <string>This setting controls which media (once loaded) does not require a first click to focus before interaction can begin. This allows clicks to be passed directly to media bypassing the focus click requirement. This setting is a bitfield, precomputed values are as follows: Disabled=0; Worn HUDs only=1; Owned objects=3; Friend objects=7; Group objects=15; Landowner objects=31; Any object=31; All MOAP=1073741824. For complete details see lltoolpie.h enum MediaFirstClickTypes.</string>
+      <string>This setting controls which media (once loaded) does not require a first click to focus before interaction can begin. This allows clicks to be passed directly to media bypassing the focus click requirement. This setting is a bitfield, precomputed values are as follows: Disabled=0; Worn HUDs only=1; Owned objects=2; Friend objects=4; Group objects=8; Landowner objects=16; Any object=32767; All MOAP=32768. For complete details see lltoolpie.h enum MediaFirstClickTypes.</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>S32</string>
       <key>Value</key>
+      <integer>31</integer>
+    </map>
+    <key>EnableSelectionHints</key>
+    <map>
+      <key>Comment</key>
+      <string>Whether or not to send editing hints to animate the arm when editing an object.</string>
+      <key>Persist</key>
       <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>EnableLookAtTarget</key>
+    <map>
+      <key>Comment</key>
+      <string>Whether or not to animate the avatar head and send look at targets when moving the cursor or focusing on objects</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>LimitLookAtTarget</key>
+    <map>
+      <key>Comment</key>
+      <string>Whether or not to clamp the look at targets around the avatar head before sending</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>LimitLookAtTargetDistance</key>
+    <map>
+      <key>Comment</key>
+      <string>Distance to limit look at target to</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <integer>2</integer>
+    </map>
+    <key>PurgeDiskCacheOnStartup</key>
+    <map>
+      <key>Comment</key>
+      <string>Whether or not to LRU purge the disk cache during startup on main thread</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>ScriptEditorDisableSyntaxHighlight</key>
+    <map>
+      <key>Comment</key>
+      <string>Disable syntax highlighting in script editor for performance testing</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
     </map>
 </map>
 </llsd>

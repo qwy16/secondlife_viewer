@@ -45,7 +45,9 @@
 #include "llworld.h"
 
 #include "tinygltf/tiny_gltf.h"
-#include <strstream>
+
+#include <boost/iostreams/device/array.hpp>
+#include <boost/iostreams/stream.hpp>
 
 #include <unordered_set>
 
@@ -168,7 +170,7 @@ namespace
 
 void LLGLTFMaterialList::applyOverrideMessage(LLMessageSystem* msg, const std::string& data_in)
 {
-    std::istringstream str(data_in);
+    boost::iostreams::stream<boost::iostreams::array_source> str(data_in.data(), data_in.size());
 
     LLSD data;
 
@@ -357,6 +359,7 @@ void LLGLTFMaterialList::queueApply(const LLViewerObject* obj, S32 side, const L
 {
     if (asset_id.isNull() || override_json.empty())
     {
+        // If there is no asset, there can't be an override
         queueApply(obj, side, asset_id);
     }
     else
@@ -369,6 +372,7 @@ void LLGLTFMaterialList::queueApply(const LLViewerObject* obj, S32 side, const L
 {
     if (asset_id.isNull() || material_override == nullptr)
     {
+        // If there is no asset, there can't be an override
         queueApply(obj, side, asset_id);
     }
     else
@@ -468,7 +472,7 @@ void LLGLTFMaterialList::flushUpdatesOnce(std::shared_ptr<CallbackHolder> callba
         {
             data[i]["gltf_json"] = e.override_data->asJSON();
         }
-        if (!e.override_json.empty())
+        else if (!e.override_json.empty())
         {
             data[i]["gltf_json"] = e.override_json;
         }
@@ -521,7 +525,7 @@ void LLGLTFMaterialList::onAssetLoadComplete(const LLUUID& id, LLAssetType::ETyp
 
     if (status != LL_ERR_NOERR)
     {
-        LL_WARNS("GLTF") << "Error getting material asset data: " << LLAssetStorage::getErrorString(status) << " (" << status << ")" << LL_ENDL;
+        LL_WARNS("GLTF") << "Error getting material asset data: " << LLAssetStorage::getErrorString(status) << " (" << status << ") for asset " << id << LL_ENDL;
         asset_data->mMaterial->materialComplete(false);
         delete asset_data;
     }
@@ -555,8 +559,7 @@ void LLGLTFMaterialList::onAssetLoadComplete(const LLUUID& id, LLAssetType::ETyp
                 LLSD asset;
 
                 // read file into buffer
-                std::istrstream str(&buffer[0], static_cast<S32>(buffer.size()));
-
+                boost::iostreams::stream<boost::iostreams::array_source> str(buffer.data(), buffer.size());
                 if (LLSDSerialize::deserialize(asset, str, buffer.size()))
                 {
                     if (asset.has("version") && LLGLTFMaterial::isAcceptedVersion(asset["version"].asString()))
@@ -720,9 +723,9 @@ void LLGLTFMaterialList::modifyMaterialCoro(std::string cap_url, LLSD overrides,
 {
     LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
     LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t
-        httpAdapter(new LLCoreHttpUtil::HttpCoroutineAdapter("modifyMaterialCoro", httpPolicy));
-    LLCore::HttpRequest::ptr_t httpRequest(new LLCore::HttpRequest);
-    LLCore::HttpOptions::ptr_t httpOpts(new LLCore::HttpOptions);
+        httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>("modifyMaterialCoro", httpPolicy);
+    LLCore::HttpRequest::ptr_t httpRequest = std::make_shared<LLCore::HttpRequest>();
+    LLCore::HttpOptions::ptr_t httpOpts = std::make_shared<LLCore::HttpOptions>();
     LLCore::HttpHeaders::ptr_t httpHeaders;
 
     httpOpts->setFollowRedirects(true);

@@ -44,14 +44,13 @@ public:
 
     /*virtual*/ std::string getCurPath();
     /*virtual*/ U32 countFilesInDir(const std::string &dirname, const std::string &mask);
-    /*virtual*/ bool fileExists(const std::string &filename) const;
 
     /*virtual*/ std::string getLLPluginLauncher();
     /*virtual*/ std::string getLLPluginFilename(std::string base_name);
 
 private:
     void* mDirSearch_h{ nullptr };
-    llutf16string mCurrentDir;
+    std::wstring mCurrentDir;
 };
 
 #endif // LL_LLDIR_WIN32_H

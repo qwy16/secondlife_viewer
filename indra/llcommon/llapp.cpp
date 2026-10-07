@@ -37,7 +37,7 @@
 #endif
 
 #include "llcommon.h"
-#include "llapr.h"
+
 #include "llerrorcontrol.h"
 #include "llframetimer.h"
 #include "lllivefile.h"
@@ -53,18 +53,12 @@
 //
 // Signal handling
 #ifndef LL_WINDOWS
+#include "apr_signal.h"
+
 # include <signal.h>
 # include <unistd.h> // for fork()
 void setup_signals();
 void default_unix_signal_handler(int signum, siginfo_t *info, void *);
-
-#if LL_LINUX
-#else
-// Called by breakpad exception handler after the minidump has been generated.
-bool unix_post_minidump_callback(const char *dump_dir,
-                      const char *minidump_id,
-                      void *context, bool succeeded);
-#endif
 
 # if LL_DARWIN
 /* OSX doesn't support SIGRT* */
@@ -93,6 +87,7 @@ bool LLApp::sDisableCrashlogger = false;
 LLScalarCond<LLApp::EAppStatus> LLApp::sStatus{LLApp::APP_STATUS_STOPPED};
 LLAppErrorHandler LLApp::sErrorHandler = NULL;
 
+bool gDisconnected = false;
 
 LLApp::LLApp()
 {
@@ -229,7 +224,7 @@ bool LLApp::parseCommandOptions(int argc, wchar_t** wargv)
         if(wargv[ii][1] == '-') ++offset;
 
 #if LL_WINDOWS
-    name.assign(utf16str_to_utf8str(&wargv[ii][offset]));
+    name.assign(ll_convert_wide_to_string(&wargv[ii][offset]));
 #else
     name.assign(wstring_to_utf8str(&wargv[ii][offset]));
 #endif
@@ -253,7 +248,7 @@ bool LLApp::parseCommandOptions(int argc, wchar_t** wargv)
         ++ii;
 
 #if LL_WINDOWS
-    value.assign(utf16str_to_utf8str((wargv[ii])));
+    value.assign(ll_convert_wide_to_string((wargv[ii])));
 #else
     value.assign(wstring_to_utf8str((wargv[ii])));
 #endif
@@ -720,47 +715,4 @@ void default_unix_signal_handler(int signum, siginfo_t *info, void *)
     }
 }
 
-bool unix_post_minidump_callback(const char *dump_dir,
-                      const char *minidump_id,
-                      void *context, bool succeeded)
-{
-    // Copy minidump file path into fixed buffer in the app instance to avoid
-    // heap allocations in a crash handler.
-
-    // path format: <dump_dir>/<minidump_id>.dmp
-    auto dirPathLength = strlen(dump_dir);
-    auto idLength = strlen(minidump_id);
-
-    // The path must not be truncated.
-    llassert((dirPathLength + idLength + 5) <= LLApp::MAX_MINDUMP_PATH_LENGTH);
-
-    char * path = LLApp::instance()->getMiniDumpFilename();
-    auto remaining = LLApp::MAX_MINDUMP_PATH_LENGTH;
-    strncpy(path, dump_dir, remaining);
-    remaining -= dirPathLength;
-    path += dirPathLength;
-    if (remaining > 0 && dirPathLength > 0 && path[-1] != '/')
-    {
-        *path++ = '/';
-        --remaining;
-    }
-    if (remaining > 0)
-    {
-        strncpy(path, minidump_id, remaining);
-        remaining -= idLength;
-        path += idLength;
-        strncpy(path, ".dmp", remaining);
-    }
-
-    LL_INFOS("CRASHREPORT") << "generated minidump: " << LLApp::instance()->getMiniDumpFilename() << LL_ENDL;
-    LLApp::runErrorHandler();
-
-#ifndef LL_RELEASE_FOR_DOWNLOAD
-    clear_signals();
-    return false;
-#else
-    return true;
-#endif
-}
 #endif // !WINDOWS
-

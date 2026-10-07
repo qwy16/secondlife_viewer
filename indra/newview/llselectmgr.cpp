@@ -97,6 +97,7 @@
 #include "llpanelface.h"
 #include "llglheaders.h"
 #include "llinventoryobserver.h"
+#include "llscripteditorws.h"
 
 LLViewerObject* getSelectedParentObject(LLViewerObject *object) ;
 //
@@ -1995,9 +1996,95 @@ bool LLSelectMgr::selectionSetGLTFMaterial(const LLUUID& mat_id)
                     asset_id = BLANK_MATERIAL_ASSET_ID;
                 }
             }
+
+            // If this face already has the target material ID, do nothing.
+            // This prevents re-sending the same ID on OK, which can cause the server
+            // to drop overrides when queueApply is invoked with the OLD id.
+            if (objectp->getRenderMaterialID(te) == asset_id)
+            {
+                return true;
+            }
+
+            // Preserve existing texture transforms when switching to PBR material
+            LLTextureEntry* tep = objectp->getTE(te);
+            bool should_preserve_transforms = false;
+            LLGLTFMaterial* preserved_override = nullptr;
+
+            if (tep && asset_id.notNull())
+            {
+                // Only preserve transforms from existing GLTF material override
+                // Do not fall back to texture entry transforms when switching between PBR materials
+                LLGLTFMaterial* existing_override = tep->getGLTFMaterialOverride();
+                if (existing_override)
+                {
+                    // Check if existing override has non-default transforms
+                    const LLGLTFMaterial::TextureTransform& existing_transform = existing_override->mTextureTransform[0];
+                    const LLGLTFMaterial::TextureTransform& default_transform = LLGLTFMaterial::TextureTransform();
+
+                    if (existing_transform.mScale != default_transform.mScale ||
+                        existing_transform.mOffset != default_transform.mOffset ||
+                        existing_transform.mRotation != default_transform.mRotation)
+                    {
+                        // Preserve non-default transforms from current PBR material
+                        preserved_override = new LLGLTFMaterial();
+                        for (U32 i = 0; i < LLGLTFMaterial::GLTF_TEXTURE_INFO_COUNT; ++i)
+                        {
+                            preserved_override->mTextureTransform[i].mScale = existing_transform.mScale;
+                            preserved_override->mTextureTransform[i].mOffset = existing_transform.mOffset;
+                            preserved_override->mTextureTransform[i].mRotation = existing_transform.mRotation;
+                        }
+                        should_preserve_transforms = true;
+                    }
+                    // If existing override has default transforms, don't preserve anything
+                }
+                else
+                {
+                    // No existing PBR material override - check texture entry transforms
+                    // This handles the case of switching from Blinn-Phong to PBR material
+                    F32 existing_scale_s, existing_scale_t, existing_offset_s, existing_offset_t, existing_rotation;
+                    tep->getScale(&existing_scale_s, &existing_scale_t);
+                    tep->getOffset(&existing_offset_s, &existing_offset_t);
+                    existing_rotation = tep->getRotation();
+
+                    const LLGLTFMaterial::TextureTransform& default_transform = LLGLTFMaterial::TextureTransform();
+                    if (existing_scale_s != default_transform.mScale.mV[0] || existing_scale_t != default_transform.mScale.mV[1] ||
+                        existing_offset_s != default_transform.mOffset.mV[0] || existing_offset_t != default_transform.mOffset.mV[1] ||
+                        existing_rotation != default_transform.mRotation)
+                    {
+                        // Preserve non-default transforms from texture entry
+                        preserved_override = new LLGLTFMaterial();
+                        for (U32 i = 0; i < LLGLTFMaterial::GLTF_TEXTURE_INFO_COUNT; ++i)
+                        {
+                            LLVector2 pbr_scale, pbr_offset;
+                            F32 pbr_rotation;
+                            LLGLTFMaterial::convertTextureTransformToPBR(
+                                existing_scale_s, existing_scale_t,
+                                existing_offset_s, existing_offset_t,
+                                existing_rotation,
+                                pbr_scale, pbr_offset, pbr_rotation);
+                            preserved_override->mTextureTransform[i].mScale = pbr_scale;
+                            preserved_override->mTextureTransform[i].mOffset = pbr_offset;
+                            preserved_override->mTextureTransform[i].mRotation = pbr_rotation;
+                        }
+                        should_preserve_transforms = true;
+                    }
+                }
+            }
+
             objectp->clearTEWaterExclusion(te);
             // Blank out most override data on the object and send to server
-            objectp->setRenderMaterialID(te, asset_id);
+            if (should_preserve_transforms && preserved_override)
+            {
+                // Apply material with preserved transforms
+                LLGLTFMaterialList::queueApply(objectp, te, asset_id, preserved_override);
+                // Update local state
+                objectp->setRenderMaterialID(te, asset_id, false, true);
+                tep->setGLTFMaterialOverride(preserved_override);
+            }
+            else
+            {
+                objectp->setRenderMaterialID(te, asset_id);
+            }
 
             return true;
         }
@@ -2248,6 +2335,7 @@ void LLSelectMgr::selectionRevertGLTFMaterials()
             {
                 // Restore base material
                 LLUUID asset_id = nodep->mSavedGLTFMaterialIds[te];
+                LLUUID old_asset_id = objectp->getRenderMaterialID(te);
 
                 // Update material locally
                 objectp->setRenderMaterialID(te, asset_id, false /*wait for LLGLTFMaterialList update*/);
@@ -2258,18 +2346,15 @@ void LLSelectMgr::selectionRevertGLTFMaterials()
                     objectp->setTEGLTFMaterialOverride(te, material);
                 }
 
-                // Enqueue update to server
-                if (asset_id.notNull() && material)
-                {
-                    // Restore overrides and base material
-                    LLGLTFMaterialList::queueApply(objectp, te, asset_id, material);
-                }
-                else
+                if (asset_id.isNull() || !material)
                 {
                     //blank override out
                     LLGLTFMaterialList::queueApply(objectp, te, asset_id);
                 }
-
+                else
+                {
+                    LLGLTFMaterialList::queueApply(objectp, te, asset_id, material);
+                }
             }
             return true;
         }
@@ -2969,7 +3054,6 @@ void LLSelectMgr::logNoOp(LLSelectNode* node, void *)
 // static
 void LLSelectMgr::logAttachmentRequest(LLSelectNode* node, void *)
 {
-    LLAttachmentsMgr::instance().onAttachmentRequested(node->mItemID);
 }
 
 // static
@@ -3162,13 +3246,18 @@ void LLSelectMgr::adjustTexturesByScale(bool send_to_sim, bool stretch)
 
                             LLVector2 scales = selectNode->mGLTFScales[te_num][i];
                             LLVector2 offsets = selectNode->mGLTFOffsets[te_num][i];
+                            F32 scale_delta_x = (scales[VX] - scale_x) * 0.5f;
+                            F32 scale_delta_y = (scales[VY] - scale_y) * 0.5f;
+                            F32 rotation = material->mTextureTransform[i].mRotation;
+                            F32 cos_rotation = cosf(rotation);
+                            F32 sin_rotation = sinf(rotation);
                             F64 int_part = 0;
-                            offset_x = (F32)modf((offsets[VX] + (scales[VX] - scale_x)) / 2, &int_part);
+                            offset_x = (F32)modf(offsets[VX] + cos_rotation * scale_delta_x + sin_rotation * scale_delta_y, &int_part);
                             if (offset_x < 0)
                             {
                                 offset_x++;
                             }
-                            offset_y = (F32)modf((offsets[VY] + (scales[VY] - scale_y)) / 2, &int_part);
+                            offset_y = (F32)modf(offsets[VY] - sin_rotation * scale_delta_x + cos_rotation * scale_delta_y, &int_part);
                             if (offset_y < 0)
                             {
                                 offset_y++;
@@ -6024,6 +6113,11 @@ void LLSelectMgr::processObjectProperties(LLMessageSystem* msg, void** user_data
             node->mInventorySerial = inv_serial;
             node->mSitName.assign(sit_name);
             node->mTouchName.assign(touch_name);
+
+            if (auto ws_server = LLScriptEditorWSServer::getServer())
+            {
+                ws_server->onObjectPropertyChanged(id, name, desc, inv_serial);
+            }
         }
     }
 
@@ -6108,9 +6202,23 @@ void LLSelectMgr::processObjectPropertiesFamily(LLMessageSystem* msg, void** use
         node->mCategory = category;
         node->mName.assign(name);
         node->mDescription.assign(desc);
+
+        LLViewerObject* obj = node->getObject();
+        if (obj && LLViewerObject::isObjectInPendingUpdate(owner_id, obj))
+        {
+            // current response doesn't return modify permissions flags,
+            // so we should request it separately if needed
+            obj->requestObjectUpdate();
+        }
+
     }
 
     dialog_refresh_all();
+
+    if (auto ws_server = LLScriptEditorWSServer::getServer())
+    {
+        ws_server->onObjectPropertyChanged(id, name, desc);
+    }
 }
 
 
@@ -6529,7 +6637,7 @@ void LLSelectMgr::renderSilhouettes(bool for_hud)
         gGL.popMatrix();
         gGL.popMatrix();
 
-        glLineWidth(1.f);
+        gGL.setLineWidth(1.f);
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
         if (shader)

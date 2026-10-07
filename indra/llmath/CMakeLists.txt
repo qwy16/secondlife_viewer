@@ -6,6 +6,7 @@ include(00-Common)
 include(LLCommon)
 include(bugsplat)
 include(Boost)
+include(SSE2NEON)
 
 set(llmath_SOURCE_FILES
     llbbox.cpp
@@ -23,7 +24,6 @@ set(llmath_SOURCE_FILES
     llquaternion.cpp
     llrigginginfo.cpp
     llrect.cpp
-    llsphere.cpp
     llvector4a.cpp
     llvolume.cpp
     llvolumemgr.cpp
@@ -45,8 +45,6 @@ set(llmath_SOURCE_FILES
 set(llmath_HEADER_FILES
     CMakeLists.txt
 
-    camera.h
-    coordframe.h
     llbbox.h
     llbboxlocal.h
     llcalc.h
@@ -59,6 +57,7 @@ set(llmath_HEADER_FILES
     llmath.h
     llmatrix3a.h
     llmatrix3a.inl
+    llmatrix4a.h
     llmodularmath.h
     lloctree.h
     llperlin.h
@@ -72,7 +71,6 @@ set(llmath_HEADER_FILES
     llsimdmath.h
     llsimdtypes.h
     llsimdtypes.inl
-    llsphere.h
     lltreenode.h
     llvector4a.h
     llvector4a.inl
@@ -97,10 +95,14 @@ set(llmath_HEADER_FILES
 
 list(APPEND llmath_SOURCE_FILES ${llmath_HEADER_FILES})
 
-add_library (llmath ${llmath_SOURCE_FILES})
+add_library(llmath ${llmath_SOURCE_FILES})
 
-target_link_libraries(llmath llcommon llmeshoptimizer)
-target_include_directories( llmath  INTERFACE   ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(llmath llcommon llmeshoptimizer ll::sse2neon)
+target_include_directories(llmath  INTERFACE   ${CMAKE_CURRENT_SOURCE_DIR})
+
+if (USE_PRECOMPILED_HEADERS)
+  target_precompile_headers(llmath REUSE_FROM llprecompiled)
+endif ()
 
 # Add tests
 if (LL_TESTS)

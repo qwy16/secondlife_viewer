@@ -9,21 +9,51 @@
 #   LINUX   - Linux
 #   WINDOWS - Windows
 
+include_guard()
+
 # Switches set here and in 00-Common.cmake must agree with
 # https://bitbucket.org/lindenlab/viewer-build-variables/src/tip/variables
 # Reading $LL_BUILD is an attempt to directly use those switches.
-if ("$ENV{LL_BUILD}" STREQUAL "" AND "${LL_BUILD_ENV}" STREQUAL "" )
-  message(FATAL_ERROR "Environment variable LL_BUILD must be set")
-elseif("$ENV{LL_BUILD}" STREQUAL "")
-  set( ENV{LL_BUILD} "${LL_BUILD_ENV}" )
-  message( "Setting ENV{LL_BUILD} to cached variable ${LL_BUILD_ENV}" )
+if ("$ENV{AUTOBUILD_ADDRSIZE}" STREQUAL "" AND "${AUTOBUILD_ADDRSIZE_ENV}" STREQUAL "" )
+  message(FATAL_ERROR "Environment variable AUTOBUILD_ADDRSIZE must be set")
+elseif("$ENV{AUTOBUILD_ADDRSIZE}" STREQUAL "")
+  set( ENV{AUTOBUILD_ADDRSIZE} "${AUTOBUILD_ADDRSIZE_ENV}" )
+  message( "Setting ENV{AUTOBUILD_ADDRSIZE} to cached variable ${AUTOBUILD_ADDRSIZE_ENV}" )
 else()
-  set( LL_BUILD_ENV "$ENV{LL_BUILD}" CACHE STRING "Save environment" FORCE )
+  set( AUTOBUILD_ADDRSIZE_ENV "$ENV{AUTOBUILD_ADDRSIZE}" CACHE STRING "Save environment AUTOBUILD_ADDRSIZE" FORCE )
 endif ()
-include_guard()
+
+if ("$ENV{AUTOBUILD_PLATFORM}" STREQUAL "" AND "${AUTOBUILD_PLATFORM_ENV}" STREQUAL "" )
+  message(FATAL_ERROR "Environment variable AUTOBUILD_PLATFORM must be set")
+elseif("$ENV{AUTOBUILD_PLATFORM}" STREQUAL "")
+  set( ENV{AUTOBUILD_PLATFORM} "${AUTOBUILD_PLATFORM_ENV}" )
+  message( "Setting ENV{AUTOBUILD_PLATFORM} to cached variable ${AUTOBUILD_PLATFORM_ENV}" )
+else()
+  set( AUTOBUILD_PLATFORM_ENV "$ENV{AUTOBUILD_PLATFORM}" CACHE STRING "Save environment AUTOBUILD_PLATFORM" FORCE )
+endif ()
+
+# Switches set here and in 00-Common.cmake must agree with
+# https://bitbucket.org/lindenlab/viewer-build-variables/src/tip/variables
+# Reading $LL_BUILD is an attempt to directly use those switches.
+if ("$ENV{LL_BUILD_RELEASE}" STREQUAL "" AND "${LL_BUILD_RELEASE_ENV}" STREQUAL "" )
+  message(FATAL_ERROR "Environment variable LL_BUILD_RELEASE must be set")
+elseif("$ENV{LL_BUILD_RELEASE}" STREQUAL "")
+  set( ENV{LL_BUILD_RELEASE} "${LL_BUILD_RELEASE_ENV}" )
+  message( "Setting ENV{LL_BUILD_RELEASE} to cached variable ${LL_BUILD_RELEASE_ENV}" )
+else()
+  set( LL_BUILD_RELEASE_ENV "$ENV{LL_BUILD_RELEASE}" CACHE STRING "Save environment RELEASE" FORCE )
+endif ()
+
+if ("$ENV{LL_BUILD_RELWITHDEBINFO}" STREQUAL "" AND "${LL_BUILD_RELWITHDEBINFO_ENV}" STREQUAL "" )
+  message(FATAL_ERROR "Environment variable LL_BUILD_RELWITHDEBINFO must be set")
+elseif("$ENV{LL_BUILD_RELWITHDEBINFO}" STREQUAL "")
+  set( ENV{LL_BUILD_RELWITHDEBINFO} "${LL_BUILD_RELWITHDEBINFO_ENV}" )
+  message( "Setting ENV{LL_BUILD_RELWITHDEBINFO} to cached variable ${LL_BUILD_RELWITHDEBINFO_ENV}" )
+else()
+  set( LL_BUILD_RELWITHDEBINFO_ENV "$ENV{LL_BUILD_RELWITHDEBINFO}" CACHE STRING "Save environment RELWITHDEBINFO" FORCE )
+endif ()
 
 # Relative and absolute paths to subtrees.
-
 if(NOT DEFINED COMMON_CMAKE_DIR)
     set(COMMON_CMAKE_DIR "${CMAKE_SOURCE_DIR}/cmake")
 endif(NOT DEFINED COMMON_CMAKE_DIR)
@@ -67,7 +97,7 @@ set(TEMPLATE_VERIFIER_MASTER_URL "https://github.com/secondlife/master-message-t
 
 if (NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING
-      "Build type.  One of: Debug Release RelWithDebInfo" FORCE)
+      "Build type.  One of: Release RelWithDebInfo" FORCE)
 endif (NOT CMAKE_BUILD_TYPE)
 
 # If someone has specified an address size, use that to determine the
@@ -127,16 +157,12 @@ if (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
     set(CMAKE_SYSTEM_LIBRARY_PATH /usr/lib/${DPKG_ARCH} /usr/local/lib/${DPKG_ARCH} ${CMAKE_SYSTEM_LIBRARY_PATH})
   endif (DPKG_RESULT EQUAL 0)
 
-  include(ConfigurePkgConfig)
-
-  if (INSTALL_PROPRIETARY)
-    # Only turn on headless if we can find osmesa libraries.
-    include(FindPkgConfig)
-    #pkg_check_modules(OSMESA osmesa)
-    #if (OSMESA_FOUND)
-    #  set(BUILD_HEADLESS ON CACHE BOOL "Build headless libraries.")
-    #endif (OSMESA_FOUND)
-  endif (INSTALL_PROPRIETARY)
+  # Only turn on headless if we can find osmesa libraries.
+  find_package(PkgConfig)
+  pkg_check_modules(OSMESA IMPORTED_TARGET GLOBAL osmesa)
+  if (OSMESA_FOUND)
+   set(BUILD_HEADLESS ON CACHE BOOL "Build headless libraries.")
+  endif (OSMESA_FOUND)
 
 endif (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
 
@@ -144,52 +170,50 @@ if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
   set(DARWIN 1)
 
   string(REGEX MATCH "-mmacosx-version-min=([^ ]+)" scratch "$ENV{LL_BUILD}")
-  set(CMAKE_OSX_DEPLOYMENT_TARGET "${CMAKE_MATCH_1}")
+  set(LL_REQUESTED_DEPLOYMENT_TARGET "${CMAKE_MATCH_1}")
+
+  # Determine the lowest deployment target the active macOS SDK still supports.
+  # We aim for 11.0 in our public builds, but newer Xcode/SDK releases
+  # periodically raise this floor (e.g. Xcode 26 -> 13.3, Xcode 27 -> 14), and
+  # linking against a deployment target below the SDK's minimum fails. Read the
+  # supported minimum from the SDK and clamp our requested target up to it when
+  # necessary, so the build tracks whatever the SDK allows automatically.
+  set(LL_SDK_MINIMUM_DEPLOYMENT_TARGET "")
+  execute_process(
+    COMMAND xcrun --sdk macosx --show-sdk-path
+    OUTPUT_VARIABLE LL_MACOS_SDK_PATH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+  if (LL_MACOS_SDK_PATH AND EXISTS "${LL_MACOS_SDK_PATH}/SDKSettings.plist")
+    execute_process(
+      COMMAND /usr/libexec/PlistBuddy -c
+              "Print :SupportedTargets:macosx:MinimumDeploymentTarget"
+              "${LL_MACOS_SDK_PATH}/SDKSettings.plist"
+      OUTPUT_VARIABLE LL_SDK_MINIMUM_DEPLOYMENT_TARGET
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+  endif ()
+
+  set(LL_EFFECTIVE_DEPLOYMENT_TARGET "${LL_REQUESTED_DEPLOYMENT_TARGET}")
+  if (LL_SDK_MINIMUM_DEPLOYMENT_TARGET AND
+      LL_REQUESTED_DEPLOYMENT_TARGET VERSION_LESS LL_SDK_MINIMUM_DEPLOYMENT_TARGET)
+    message(STATUS "Requested macOS deploy target ${LL_REQUESTED_DEPLOYMENT_TARGET} is below the SDK minimum ${LL_SDK_MINIMUM_DEPLOYMENT_TARGET}; clamping to ${LL_SDK_MINIMUM_DEPLOYMENT_TARGET}")
+    set(LL_EFFECTIVE_DEPLOYMENT_TARGET "${LL_SDK_MINIMUM_DEPLOYMENT_TARGET}")
+  endif ()
+
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "${LL_EFFECTIVE_DEPLOYMENT_TARGET}" CACHE STRING "macOS Deploy Target" FORCE)
   message(STATUS "CMAKE_OSX_DEPLOYMENT_TARGET = '${CMAKE_OSX_DEPLOYMENT_TARGET}'")
 
-  string(REGEX MATCH "-stdlib=([^ ]+)" scratch "$ENV{LL_BUILD}")
-  set(CMAKE_XCODE_ATTRIBUTE_CLANG_CXX_LIBRARY "${CMAKE_MATCH_1}")
-  message(STATUS "CMAKE_XCODE_ATTRIBUTE_CLANG_CXX_LIBRARY = '${CMAKE_XCODE_ATTRIBUTE_CLANG_CXX_LIBRARY}'")
-
-  string(REGEX MATCH " -g([^ ]*)" scratch "$ENV{LL_BUILD}")
-  set(CMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "${CMAKE_MATCH_1}")
-  # -gdwarf-2 is passed in LL_BUILD according to 00-COMPILE-LINK-RUN.txt.
-  # However, when CMake 3.9.2 sees -gdwarf-2, it silently deletes the whole -g
-  # switch, producing no symbols at all! The same thing happens if we specify
-  # plain -g ourselves, i.e. CMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT is
-  # the empty string. Specifying -gdwarf-with-dsym or just -gdwarf drives a
-  # different CMake behavior: it substitutes plain -g. As of 2017-09-19,
-  # viewer-build-variables/variables still passes -gdwarf-2, which is the
-  # no-symbols case. Set -gdwarf, triggering CMake to substitute plain -g --
-  # at least that way we should get symbols, albeit mangled ones. It Would Be
-  # Nice if CMake's behavior could be predicted from a consistent mental
-  # model, instead of only observed experimentally.
-  string(REPLACE "dwarf-2" "dwarf"
-    CMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT
-    "${CMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT}")
-  message(STATUS "CMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT = '${CMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT}'")
+  # Use dwarf symbols for most libraries for compilation speed
+  set(CMAKE_XCODE_ATTRIBUTE_DEBUG_INFORMATION_FORMAT "dwarf")
 
   string(REGEX MATCH "-O([^ ]*)" scratch "$ENV{LL_BUILD}")
   set(CMAKE_XCODE_ATTRIBUTE_GCC_OPTIMIZATION_LEVEL "${CMAKE_MATCH_1}")
   message(STATUS "CMAKE_XCODE_ATTRIBUTE_GCC_OPTIMIZATION_LEVEL = '${CMAKE_XCODE_ATTRIBUTE_GCC_OPTIMIZATION_LEVEL}'")
 
-  # allow disabling this check by setting LL_SKIP_REQUIRE_SYSROOT either ON as cmake cache var or non-empty as environment var
-  set(LL_SKIP_REQUIRE_SYSROOT OFF CACHE BOOL "Skip requirement to set toolchain sysroot ahead of time. Not skipped by default for consistency, but skipping can be useful for selecting alternative xcode versions side by side")
-  if("$ENV{LL_SKIP_REQUIRE_SYSROOT}" STREQUAL "" AND NOT ${LL_SKIP_REQUIRE_SYSROOT})
-    string(REGEX MATCHALL "[^ ]+" LL_BUILD_LIST "$ENV{LL_BUILD}")
-    list(FIND LL_BUILD_LIST "-iwithsysroot" sysroot_idx)
-    if ("${sysroot_idx}" LESS 0)
-      message(FATAL_ERROR "Environment variable LL_BUILD must contain '-iwithsysroot'")
-    endif ()
-    math(EXPR sysroot_idx "${sysroot_idx} + 1")
-    list(GET LL_BUILD_LIST "${sysroot_idx}" CMAKE_OSX_SYSROOT)
-  endif()
-  message(STATUS "CMAKE_OSX_SYSROOT = '${CMAKE_OSX_SYSROOT}'")
-
-  set(CMAKE_XCODE_ATTRIBUTE_GCC_VERSION "com.apple.compilers.llvm.clang.1_0")
   set(CMAKE_XCODE_ATTRIBUTE_GCC_STRICT_ALIASING NO)
   set(CMAKE_XCODE_ATTRIBUTE_GCC_FAST_MATH NO)
-  set(CMAKE_XCODE_ATTRIBUTE_CLANG_X86_VECTOR_INSTRUCTIONS ssse3)
+  set(CMAKE_XCODE_ATTRIBUTE_CLANG_X86_VECTOR_INSTRUCTIONS sse4.2)
   # we must hard code this to off for now.  xcode's built in signing does not
   # handle embedded app bundles such as CEF and others. Any signing for local
   # development must be done after the build as we do in viewer_manifest.py for
@@ -204,9 +228,12 @@ if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
   set(CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "")
   set(CMAKE_XCODE_ATTRIBUTE_DISABLE_MANUAL_TARGET_ORDER_BUILD_WARNING YES)
   set(CMAKE_XCODE_ATTRIBUTE_GCC_WARN_64_TO_32_BIT_CONVERSION NO)
-  set(CMAKE_OSX_ARCHITECTURES "${ARCH}")
-  string(REPLACE "i686"  "i386"   CMAKE_OSX_ARCHITECTURES "${CMAKE_OSX_ARCHITECTURES}")
-  string(REPLACE "AMD64" "x86_64" CMAKE_OSX_ARCHITECTURES "${CMAKE_OSX_ARCHITECTURES}")
+  set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "macOS Build Arch" FORCE)
+  if(CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+    set(LL_MACOS_TEST_ARCHITECTURE "arm64")
+  else()
+    set(LL_MACOS_TEST_ARCHITECTURE "x86_64")
+  endif()
 endif (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
 
 # Default deploy grid

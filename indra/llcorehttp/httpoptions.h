@@ -55,7 +55,7 @@ namespace LLCore
 /// Allocation:  Refcounted, heap only.  Caller of the constructor
 /// is given a refcount.
 ///
-class HttpOptions : private boost::noncopyable
+class HttpOptions
 {
 public:
     HttpOptions();
@@ -64,10 +64,9 @@ public:
 
     virtual ~HttpOptions();                     // Use release()
 
-protected:
-
-    HttpOptions(const HttpOptions &);           // Not defined
-    void operator=(const HttpOptions &);        // Not defined
+    // Non-copyable
+    HttpOptions(const HttpOptions&) = delete;
+    HttpOptions& operator=(const HttpOptions&) = delete;
 
 public:
 
@@ -178,6 +177,13 @@ public:
         return mNoBody;
     }
 
+    // Default:   0
+    void setLastModified(time_t lastModified);
+    time_t getLastModified() const
+    {
+        return mLastModified;
+    }
+
     /// Sets default behavior for verifying that the name in the
     /// security certificate matches the name of the host contacted.
     /// Defaults false if not set, but should be set according to
@@ -199,6 +205,7 @@ protected:
     bool                mVerifyHost;
     int                 mDNSCacheTimeout;
     bool                mNoBody;
+    time_t              mLastModified;
 
     static bool         sDefaultVerifyPeer;
 }; // end class HttpOptions

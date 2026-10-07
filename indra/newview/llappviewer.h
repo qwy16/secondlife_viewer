@@ -17,7 +17,7 @@
  *
  * $LicenseInfo:firstyear=2007&license=viewerlgpl$
  * Second Life Viewer Source Code
- * Copyright (C) 2010, Linden Research, Inc.
+ * Copyright (C) 2026, Linden Research, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -76,7 +76,10 @@ typedef enum
     LAST_EXEC_LOGOUT_CRASH,
     LAST_EXEC_BAD_ALLOC,
     LAST_EXEC_MISSING_FILES,
-    LAST_EXEC_GRAPHICS_INIT,
+    LAST_EXEC_INIT,
+    LAST_EXEC_UNKNOWN,
+    LAST_EXEC_LOGOUT_UNKNOWN,
+    LAST_EXEC_OS_EVENT,
     LAST_EXEC_COUNT
 } eLastExecEvent;
 
@@ -111,13 +114,11 @@ public:
                    const LLSD& substitutions = LLSD()); // Display an error dialog and forcibly quit.
     void earlyExitNoNotify(); // Do not display error dialog then forcibly quit.
     void abortQuit();  // Called to abort a quit request.
+    void sendViewerStatistics(bool include_preferences);
 
     bool quitRequested() { return mQuitRequested; }
     bool logoutRequestSent() { return mLogoutRequestSent; }
     bool isSecondInstance() { return mSecondInstance; }
-    bool isUpdaterMissing(); // In use by tests
-    bool waitForUpdater();
-
     void writeDebugInfo(bool isStatic=true);
 
     void setServerReleaseNotesURL(const std::string& url) { mServerReleaseNotesURL = url; }
@@ -149,6 +150,12 @@ public:
     std::string getWindowTitle() const; // The window display name.
 
     void forceDisconnect(const std::string& msg); // Force disconnection, with a message to the user.
+
+    // sendSimpleLogoutRequest does not create a marker file.
+    // Meant for lost network case, and for forced shutdowns,
+    // to at least attempt to remove the ghost from the world.
+    void sendSimpleLogoutRequest();
+
     void badNetworkHandler(); // Cause a crash state due to bad network packet.
 
     bool hasSavedFinalSnapshot() { return mSavedFinalSnapshot; }
@@ -175,6 +182,7 @@ public:
     virtual void forceErrorCoroprocedureCrash();
     virtual void forceErrorWorkQueueCrash();
     virtual void forceErrorThreadCrash();
+    virtual void forceExceptionThreadCrash();
 
     // The list is found in app_settings/settings_files.xml
     // but since they are used explicitly in code,
@@ -197,11 +205,14 @@ public:
     // For thread debugging.
     // llstartup needs to control init.
     // llworld, send_agent_pause() also controls pause/resume.
-    void initMainloopTimeout(std::string_view state, F32 secs = -1.0f);
+    void initMainloopTimeout(std::string_view state);
     void destroyMainloopTimeout();
     void pauseMainloopTimeout();
-    void resumeMainloopTimeout(std::string_view state = "", F32 secs = -1.0f);
-    void pingMainloopTimeout(std::string_view state, F32 secs = -1.0f);
+    void resumeMainloopTimeout(std::string_view state = "");
+    void pingMainloopTimeout(std::string_view state);
+
+    F32 getMainloopTimeoutSec() const;
+    std::string getMainloopWatchdogState() const;
 
     // Handle the 'login completed' event.
     // *NOTE:Mani Fix this for login abstraction!!
@@ -215,10 +226,11 @@ public:
         return mOnLoginCompleted.connect(cb);
     }
 
-    void addOnIdleCallback(const boost::function<void()>& cb); // add a callback to fire (once) when idle
+    void addOnIdleCallback(const std::function<void()>& cb); // add a callback to fire (once) when idle
 
     void initGeneralThread();
     void purgeUserDataOnExit() { mPurgeUserDataOnExit = true; }
+    void purgeCefStaleCaches();  // Remove old, stale CEF cache folders
     void purgeCache(); // Clear the local cache.
     void purgeCacheImmediate(); //clear local cache immediately.
     S32  updateTextureThreads(F32 max_time);
@@ -243,6 +255,14 @@ public:
 
     // Writes an error code into the error_marker file for use on next startup.
     void createErrorMarker(eLastExecEvent error_code) const;
+    bool errorMarkerExists() const;
+
+    void createCloseRequestMarker() const;
+    void removeCloseRequestMarker() const;
+    void createInitedMarker() const;
+    void removeInitedMarker() const;
+    void createWatchdogMarker() const;
+    void removeWatchdogMarker() const;
 
     // Attempt a 'soft' quit with disconnect and saving of settings/cache.
     // Intended to be thread safe.
@@ -250,13 +270,31 @@ public:
     // Note: mQuitRequested can be aborted by user.
     void outOfMemorySoftQuit();
 
+    virtual void setPermitOSHibernation(bool permit);
+
+#ifdef LL_DISCORD
+    static void initDiscordSocial();
+    static void updateDiscordActivity();
+    static void updateDiscordPartyCurrentSize(int32_t size);
+    static void updateDiscordPartyMaxSize(int32_t size);
+#endif
+
 protected:
     virtual bool initWindow(); // Initialize the viewer's window.
     virtual void initLoggingAndGetLastDuration(); // Initialize log files, logging system
     virtual void initConsole() {}; // Initialize OS level debugging console.
+    virtual void cleanupConsole() {}; // Cleanup OS level debugging console.
     virtual bool initHardwareTest() { return true; } // A false result indicates the app should quit.
     virtual bool initSLURLHandler();
     virtual bool sendURLToOtherInstance(const std::string& url);
+
+    typedef enum
+    {
+        LL_HIBERNATE_MODE_DEFAULT = 0, // Use the platform's default behavior.
+        LL_HIBERNATE_MODE_PREVENT = 1,
+        LL_HIBERNATE_MODE_PREVENT_SCREEN = 2,
+    } eHibernationMode;
+    virtual void setOSHibernationMode(eHibernationMode mode);
 
     virtual bool initParseCommandLine(LLCommandLineParser& clp)
         { return true; } // Allow platforms to specify the command line args.
@@ -267,6 +305,14 @@ protected:
 
     virtual void sendOutOfDiskSpaceNotification();
 
+protected:
+
+    // NSIS relies on this to detect if viewer is up.
+    // NSIS's method is somewhat unreliable since window
+    // can close long before cleanup is done.
+    // sendURLToOtherInstance also relies on this to detect if viewer is up.
+    static constexpr const char* sWindowClass = "Second Life";
+
 private:
 
     bool doFrame();
@@ -275,6 +321,7 @@ private:
     bool initThreads(); // Initialize viewer threads, return false on failure.
     bool initConfiguration(); // Initialize settings from the command line/config file.
     void initStrings();       // Initialize LLTrans machinery
+    void loadLocalizedSettingsComments(); // Override Debug Settings comments for current locale
     bool initCache(); // Initialize local client cache.
 
     // We have switched locations of both Mac and Windows cache, make sure
@@ -307,7 +354,6 @@ private:
     static LLAppViewer* sInstance;
 
     bool mSecondInstance; // Is this a second instance of the app?
-    bool mUpdaterNotFound; // True when attempt to start updater failed
 
     std::string mMarkerFileName;
     LLAPRFile mMarkerFile; // A file created to indicate the app is running.
@@ -357,6 +403,9 @@ private:
     LLAppCoreHttp mAppCoreHttp;
 
     bool mIsFirstRun;
+
+    eHibernationMode mCurrentHibernationMode = LL_HIBERNATE_MODE_DEFAULT;
+    boost::signals2::scoped_connection mOSHibernationModeChangeConnection;
 };
 
 // Globals with external linkage. From viewer.h
@@ -396,8 +445,6 @@ extern S32 gPendingMetricsUploads;
 
 extern F32 gSimLastTime;
 extern F32 gSimFrames;
-
-extern bool     gDisconnected;
 
 extern LLFrameTimer gRestoreGLTimer;
 extern bool         gRestoreGL;

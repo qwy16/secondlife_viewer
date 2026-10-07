@@ -196,8 +196,11 @@ public:
 
     LLFolderViewItem* getNextUnselectedItem();
 
-    // Public rename functionality - can only start the process
+    // Public rename functionality
     void startRenamingSelectedItem( void );
+    void cancelRenaming( void );
+    LLFolderViewItem* getRenameItem() const { return mRenameItem; }
+    bool isRenaming() const { return mRenameItem != NULL; }
 
     // LLView functionality
     ///*virtual*/ bool handleKey( KEY key, MASK mask, bool called_from_parent );
@@ -221,6 +224,7 @@ public:
     void scrollToShowSelection();
     void scrollToShowItem(LLFolderViewItem* item, const LLRect& constraint_rect);
     void setScrollContainer( LLScrollContainer* parent ) { mScrollContainer = parent; }
+    LLScrollContainer* getScrollContainer() { return mScrollContainer; }
     LLRect getVisibleRect();
 
     bool search(LLFolderViewItem* first_item, const std::string &search_string, bool backward);

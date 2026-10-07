@@ -404,7 +404,9 @@ LLPanelOutfitEdit::LLPanelOutfitEdit()
     mWearableListManager(NULL),
     mPlusBtn(NULL),
     mWearablesGearMenuBtn(NULL),
-    mGearMenuBtn(NULL)
+    mGearMenuBtn(NULL),
+    mStatus(NULL),
+    mCurrentOutfitName(NULL)
 {
     mSavedFolderState = new LLSaveFolderState();
     mSavedFolderState->setApply(false);
@@ -1307,7 +1309,7 @@ void LLPanelOutfitEdit::showFilteredWearablesListView(LLWearableType::EType type
     showWearablesListView();
 
     //e_list_view_item_type implicitly contains LLWearableType::EType starting from LVIT_SHAPE
-    applyListViewFilter(static_cast<EListViewItemType>(LVIT_SHAPE + type));
+    applyListViewFilter(static_cast<EListViewItemType>(static_cast<U32>(LVIT_SHAPE) + static_cast<U32>(type)));
     mWearableItemsList->setMenuWearableType(type);
 }
 

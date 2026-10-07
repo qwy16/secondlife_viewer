@@ -30,7 +30,6 @@
 #define LL_LLPLUGINPROCESSPARENT_H
 
 #include <queue>
-#include <boost/enable_shared_from_this.hpp>
 
 #include "llapr.h"
 #include "llprocess.h"
@@ -119,6 +118,8 @@ public:
 
     bool getDisableTimeout() { return mDisableTimeout; };
     void setDisableTimeout(bool disable) { mDisableTimeout = disable; };
+
+    LLProcess::id getProcessID() const { return mProcess ? mProcess->getProcessID() : 0; }
 
     void setLaunchTimeout(F32 timeout) { mPluginLaunchTimeout = timeout; };
     void setLockupTimeout(F32 timeout) { mPluginLockupTimeout = timeout; };

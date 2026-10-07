@@ -10,7 +10,13 @@
 ## Nicky: Ideally we want at least 3.21 for good preset support
 ##   We're not there yet, but once done, there is a kludge in Linking.cmake
 #    "if(${CMAKE_VERSION} VERSION_LESS "3.20.0")" that can also be removed
-cmake_minimum_required(VERSION 3.16.0 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.16.0...4.0 FATAL_ERROR)
+if(${CMAKE_VERSION} VERSION_GREATER_EQUAL "3.29.0")
+    cmake_policy(SET CMP0156 NEW)
+endif()
+if(${CMAKE_VERSION} VERSION_GREATER_EQUAL "3.31.0")
+    cmake_policy(SET CMP0179 NEW)
+endif()
 
 set(ROOT_PROJECT_NAME "SecondLife" CACHE STRING
     "The root project/makefile/solution name. Defaults to SecondLife.")
@@ -33,6 +39,14 @@ if (NOT DEFINED CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 20)
 endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF) # This slows down build massively
+
+set(CMAKE_OPTIMIZE_DEPENDENCIES ON)
+
+set(CMAKE_COLOR_DIAGNOSTICS ON)
+
+# Speeds up cmake generation significantly in some cases
+set(CMAKE_XCODE_GENERATE_TOP_LEVEL_PROJECT_ONLY ON)
 
 include(Variables)
 include(BuildVersion)
@@ -42,8 +56,42 @@ if (NOT CMAKE_BUILD_TYPE)
       "Build type.  One of: Debug Release RelWithDebInfo" FORCE)
 endif (NOT CMAKE_BUILD_TYPE)
 
+if (LL_TESTS)
+  set(CMAKE_SKIP_TEST_ALL_DEPENDENCY FALSE)
+  include(ProcessorCount)
+  ProcessorCount(NUM_CORES)
+
+  # Set parallel level to decrease test runtime
+  set(CMAKE_CTEST_ARGUMENTS -j${NUM_CORES} --output-on-failure)
+
+  # Set up our test targets
+  set(CTEST_TEST_TARGET_ALIAS BUILD_AND_RUN_TESTS)
+  include(CTest)
+
+  set_target_properties(BUILD_AND_RUN_TESTS
+        PROPERTIES
+        FOLDER "CMakePredefinedTargets"
+        )
+
+  add_custom_target(BUILD_TESTS)
+  add_dependencies(BUILD_AND_RUN_TESTS BUILD_TESTS)
+
+  set_target_properties(BUILD_TESTS
+        PROPERTIES
+        FOLDER "CMakePredefinedTargets"
+        )
+endif ()
+
 add_subdirectory(cmake)
 
+# Velopack must be included before llfilesystem since filesystem
+# needs LL_VELOPACK compile definition for its portable-install detection.
+if (USE_VELOPACK)
+  include(Velopack)
+endif()
+if (USE_PRECOMPILED_HEADERS)
+  add_subdirectory(${LIBS_OPEN_PREFIX}llprecompiled)
+endif ()
 add_subdirectory(${LIBS_OPEN_PREFIX}llaudio)
 add_subdirectory(${LIBS_OPEN_PREFIX}llappearance)
 add_subdirectory(${LIBS_OPEN_PREFIX}llcharacter)
@@ -56,6 +104,7 @@ add_subdirectory(${LIBS_OPEN_PREFIX}llinventory)
 add_subdirectory(${LIBS_OPEN_PREFIX}llmath)
 add_subdirectory(${LIBS_OPEN_PREFIX}llmeshoptimizer)
 add_subdirectory(${LIBS_OPEN_PREFIX}llmessage)
+add_subdirectory(${LIBS_OPEN_PREFIX}llphysicsextensionsos)
 add_subdirectory(${LIBS_OPEN_PREFIX}llprimitive)
 add_subdirectory(${LIBS_OPEN_PREFIX}llrender)
 add_subdirectory(${LIBS_OPEN_PREFIX}llfilesystem)
@@ -68,10 +117,6 @@ if (WINDOWS AND EXISTS ${LIBS_CLOSED_DIR}copy_win_scripts)
 endif (WINDOWS AND EXISTS ${LIBS_CLOSED_DIR}copy_win_scripts)
 
 add_custom_target(viewer)
-
-if (NOT USE_BUGSPLAT)
-add_subdirectory(${LIBS_OPEN_PREFIX}llcrashlogger)
-endif (NOT USE_BUGSPLAT)
 
 add_subdirectory(${LIBS_OPEN_PREFIX}llplugin)
 add_subdirectory(${LIBS_OPEN_PREFIX}llui)
@@ -88,16 +133,8 @@ add_subdirectory(${LIBS_OPEN_PREFIX}media_plugins)
 endif (ENABLE_MEDIA_PLUGINS)
 
 if (LINUX)
-  if (INSTALL_PROPRIETARY)
-      include(LLAppearanceUtility)
-      add_subdirectory(${LLAPPEARANCEUTILITY_SRC_DIR} ${LLAPPEARANCEUTILITY_BIN_DIR})
-  endif (INSTALL_PROPRIETARY)
-elseif (WINDOWS)
-  # cmake EXISTS requires an absolute path, see indra/cmake/Variables.cmake
-  if (EXISTS ${VIEWER_DIR}win_setup)
-    add_subdirectory(${VIEWER_DIR}win_setup)
-  endif (EXISTS ${VIEWER_DIR}win_setup)
-endif (LINUX)
+  add_subdirectory(llappearanceutility)
+endif()
 
 if (WINDOWS)
     # cmake EXISTS requires an absolute path, see indra/cmake/Variables.cmake

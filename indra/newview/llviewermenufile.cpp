@@ -69,6 +69,7 @@
 #include "llviewerassetupload.h"
 
 // linden libraries
+#include "llfilesystem.h"
 #include "llnotificationsutil.h"
 #include "llsdserialize.h"
 #include "llsdutil.h"
@@ -79,7 +80,12 @@
 #include "message.h"
 
 // system libraries
+#include <atomic>
+#include <thread>
+#include <boost/filesystem.hpp>
 #include <boost/tokenizer.hpp>
+#include "lldirpicker.h"
+#include "llcallbacklist.h"
 
 class LLFileEnableUpload : public view_listener_t
 {
@@ -94,7 +100,7 @@ class LLFileEnableUploadModel : public view_listener_t
     bool handleEvent(const LLSD& userdata)
     {
         LLFloaterModelPreview* fmp = (LLFloaterModelPreview*) LLFloaterReg::findInstance("upload_model");
-        if (fmp && fmp->isModelLoading())
+        if (fmp && !fmp->isDead() && fmp->isModelLoading())
         {
             return false;
         }
@@ -137,11 +143,11 @@ std::queue<LLFilePickerThread*> LLFilePickerThread::sDeadQ;
 
 void LLFilePickerThread::getFile()
 {
-#if LL_WINDOWS
+#if LL_DARWIN || LL_SDL_WINDOW
+    runModeless();
+#elif LL_WINDOWS
     // Todo: get rid of LLFilePickerThread and make this modeless
     start();
-#elif LL_DARWIN
-    runModeless();
 #else
     run();
 #endif
@@ -334,7 +340,9 @@ void LLFilePickerReplyThread::startPicker(const file_picked_signal_t::slot_type 
 
 void LLFilePickerReplyThread::startPicker(const file_picked_signal_t::slot_type & cb, LLFilePicker::ESaveFilter filter, const std::string & proposed_name, const file_picked_signal_t::slot_type & failure_cb)
 {
-    (new LLFilePickerReplyThread(cb, filter, proposed_name, failure_cb))->getFile();
+    // Remove invalid characters
+    std::string sanitized_name = LLDir::getScrubbedFileName(proposed_name);
+    (new LLFilePickerReplyThread(cb, filter, sanitized_name, failure_cb))->getFile();
 }
 
 void LLFilePickerReplyThread::notify(const std::vector<std::string>& filenames)
@@ -478,13 +486,19 @@ const bool check_file_extension(const std::string& filename, LLFilePicker::ELoad
     return true;
 }
 
-const void upload_single_file(const std::vector<std::string>& filenames, LLFilePicker::ELoadFilter type)
+void upload_single_file(
+    const std::vector<std::string>& filenames,
+    LLFilePicker::ELoadFilter type,
+    const LLUUID& dest)
 {
     std::string filename = filenames[0];
     if (!check_file_extension(filename, type)) return;
 
     if (!filename.empty())
     {
+        LLSD args;
+        args["filename"] = filename;
+        args["dest"] = dest;
         if (type == LLFilePicker::FFLOAD_WAV)
         {
             // pre-qualify wavs to make sure the format is acceptable
@@ -499,12 +513,12 @@ const void upload_single_file(const std::vector<std::string>& filenames, LLFileP
             }
             else
             {
-                LLFloaterReg::showInstance("upload_sound", LLSD(filename));
+                LLFloaterReg::showInstance("upload_sound", args);
             }
         }
         if (type == LLFilePicker::FFLOAD_IMAGE)
         {
-            LLFloaterReg::showInstance("upload_image", LLSD(filename));
+            LLFloaterReg::showInstance("upload_image", args);
         }
         if (type == LLFilePicker::FFLOAD_ANIM)
         {
@@ -512,18 +526,19 @@ const void upload_single_file(const std::vector<std::string>& filenames, LLFileP
             LLStringUtil::toLower(filename_lc);
             if (filename_lc.rfind(".anim") != std::string::npos)
             {
-                LLFloaterReg::showInstance("upload_anim_anim", LLSD(filename));
+                LLFloaterReg::showInstance("upload_anim_anim", args);
             }
             else
             {
-                LLFloaterReg::showInstance("upload_anim_bvh", LLSD(filename));
+                LLFloaterReg::showInstance("upload_anim_bvh", args);
             }
         }
     }
     return;
 }
 
-void do_bulk_upload(std::vector<std::string> filenames, bool allow_2k)
+void do_bulk_upload(std::vector<std::string> filenames, bool allow_2k, const LLUUID& dest,
+                    const LLUUID& material_dest, const LLUUID& texture_dest)
 {
     for (std::vector<std::string>::const_iterator in_iter = filenames.begin(); in_iter != filenames.end(); ++in_iter)
     {
@@ -544,16 +559,9 @@ void do_bulk_upload(std::vector<std::string> filenames, bool allow_2k)
         if (LLResourceUploadInfo::findAssetTypeAndCodecOfExtension(ext, asset_type, codec))
         {
             bool resource_upload = false;
-            if (asset_type == LLAssetType::AT_TEXTURE && allow_2k)
+            if (asset_type == LLAssetType::AT_TEXTURE)
             {
-                LLPointer<LLImageFormatted> image_frmted = LLImageFormatted::createFromType(codec);
-                if (gDirUtilp->fileExists(filename) && image_frmted && image_frmted->load(filename))
-                {
-                    S32 biased_width = LLImageRaw::biasedDimToPowerOfTwo(image_frmted->getWidth(), LLViewerFetchedTexture::MAX_IMAGE_SIZE_DEFAULT);
-                    S32 biased_height = LLImageRaw::biasedDimToPowerOfTwo(image_frmted->getHeight(), LLViewerFetchedTexture::MAX_IMAGE_SIZE_DEFAULT);
-                    expected_upload_cost = LLAgentBenefitsMgr::current().getTextureUploadCost(biased_width, biased_height);
-                    resource_upload = true;
-                }
+                resource_upload = true;
             }
             else if (LLAgentBenefitsMgr::current().findUploadCost(asset_type, expected_upload_cost))
             {
@@ -562,23 +570,116 @@ void do_bulk_upload(std::vector<std::string> filenames, bool allow_2k)
 
             if (resource_upload)
             {
-                LLNewFileResourceUploadInfo* info_p = new LLNewFileResourceUploadInfo(
-                    filename,
-                    asset_name,
-                    asset_name, 0,
-                    LLFolderType::FT_NONE, LLInventoryType::IT_NONE,
-                    LLFloaterPerms::getNextOwnerPerms("Uploads"),
-                    LLFloaterPerms::getGroupPerms("Uploads"),
-                    LLFloaterPerms::getEveryonePerms("Uploads"),
-                    expected_upload_cost);
-
-                if (!allow_2k)
+                if (asset_type == LLAssetType::AT_TEXTURE)
                 {
-                    info_p->setMaxImageSize(1024);
-                }
-                LLResourceUploadInfo::ptr_t uploadInfo(info_p);
+                    std::string exten = gDirUtilp->getExtension(filename);
+                    U32         codec = LLImageBase::getCodecFromExtension(exten);
 
-                upload_new_resource(uploadInfo);
+                    // Load the image
+                    LLPointer<LLImageFormatted> image = LLImageFormatted::createFromType(codec);
+                    if (image.isNull())
+                    {
+                        LL_WARNS() << "Failed to create image container for " << filename << LL_ENDL;
+                        continue;
+                    }
+                    if (!image->load(filename))
+                    {
+                        LL_WARNS() << "Failed to load image: " << filename << LL_ENDL;
+                        continue;
+                    }
+                    // Decompress or expand it in a raw image structure
+                    LLPointer<LLImageRaw> raw_image = new LLImageRaw;
+                    if (!image->decode(raw_image, 0.0f))
+                    {
+                        LL_WARNS() << "Failed to decode image: " << filename << LL_ENDL;
+                        continue;
+                    }
+                    // Check the image constraints
+                    if ((image->getComponents() != 3) && (image->getComponents() != 4))
+                    {
+                        LL_WARNS() << "Attempted to upload a texture that has " << image->getComponents()
+                                   << " components, but only 3 (RGB) or 4 (RGBA) are allowed." << LL_ENDL;
+                        continue;
+                    }
+                    // Downscale images to fit the max_texture_dimensions_*, or 1024 if allow_2k is false
+                    S32 max_width  = allow_2k ? gSavedSettings.getS32("max_texture_dimension_X") : 1024;
+                    S32 max_height = allow_2k ? gSavedSettings.getS32("max_texture_dimension_Y") : 1024;
+
+                    S32 orig_width  = raw_image->getWidth();
+                    S32 orig_height = raw_image->getHeight();
+
+                    if (orig_width > max_width || orig_height > max_height)
+                    {
+                        // Calculate scale factors
+                        F32 width_scale  = (F32)max_width / (F32)orig_width;
+                        F32 height_scale = (F32)max_height / (F32)orig_height;
+                        F32 scale        = llmin(width_scale, height_scale);
+
+                        // Calculate new dimensions, preserving aspect ratio
+                        S32 new_width  = LLImageRaw::contractDimToPowerOfTwo(llclamp((S32)llroundf(orig_width * scale), 4, max_width));
+                        S32 new_height = LLImageRaw::contractDimToPowerOfTwo(llclamp((S32)llroundf(orig_height * scale), 4, max_height));
+
+                        if (!raw_image->scale(new_width, new_height))
+                        {
+                            LL_WARNS() << "Failed to scale image from " << orig_width << "x" << orig_height << " to " << new_width << "x"
+                                       << new_height << LL_ENDL;
+                            continue;
+                        }
+
+                        // Inform the resident about the resized image
+                        LLSD subs;
+                        subs["[ORIGINAL_WIDTH]"]  = orig_width;
+                        subs["[ORIGINAL_HEIGHT]"] = orig_height;
+                        subs["[NEW_WIDTH]"]       = new_width;
+                        subs["[NEW_HEIGHT]"]      = new_height;
+                        subs["[MAX_WIDTH]"]       = max_width;
+                        subs["[MAX_HEIGHT]"]      = max_height;
+                        LLNotificationsUtil::add("ImageUploadResized", subs);
+                    }
+
+                    raw_image->biasedScaleToPowerOfTwo(LLViewerFetchedTexture::MAX_IMAGE_SIZE_DEFAULT);
+
+                    LLTransactionID tid;
+                    tid.generate();
+                    LLAssetID new_asset_id = tid.makeAssetID(gAgent.getSecureSessionID());
+
+                    LLPointer<LLImageJ2C> formatted = new LLImageJ2C;
+
+                    if (formatted->encode(raw_image, 0.0f))
+                    {
+                        LLFileSystem fmt_file(new_asset_id, LLAssetType::AT_TEXTURE, LLFileSystem::WRITE);
+                        fmt_file.write(formatted->getData(), formatted->getDataSize());
+
+                        LLResourceUploadInfo::ptr_t assetUploadInfo = std::make_shared<LLResourceUploadInfo>(
+                            tid, LLAssetType::AT_TEXTURE,
+                            asset_name,
+                            asset_name, 0,
+                            LLFolderType::FT_NONE, LLInventoryType::IT_NONE,
+                            LLFloaterPerms::getNextOwnerPerms("Uploads"),
+                            LLFloaterPerms::getGroupPerms("Uploads"),
+                            LLFloaterPerms::getEveryonePerms("Uploads"),
+                            LLAgentBenefitsMgr::current().getTextureUploadCost(raw_image->getWidth(), raw_image->getHeight()),
+                            dest
+                        );
+
+                        upload_new_resource(assetUploadInfo);
+                    }
+                }
+                else
+                {
+                    LLResourceUploadInfo::ptr_t uploadInfo = std::make_shared<LLNewFileResourceUploadInfo>(
+                        filename,
+                        asset_name,
+                        asset_name, 0,
+                        LLFolderType::FT_NONE, LLInventoryType::IT_NONE,
+                        LLFloaterPerms::getNextOwnerPerms("Uploads"),
+                        LLFloaterPerms::getGroupPerms("Uploads"),
+                        LLFloaterPerms::getEveryonePerms("Uploads"),
+                        expected_upload_cost,
+                        dest);
+
+                    upload_new_resource(uploadInfo);
+                }
             }
         }
 
@@ -595,14 +696,17 @@ void do_bulk_upload(std::vector<std::string> filenames, bool allow_2k)
                     // Todo:
                     // 1. Decouple bulk upload from material editor
                     // 2. Take into account possiblity of identical textures
-                    LLMaterialEditor::uploadMaterialFromModel(filename, model, i);
+                    if (material_dest.notNull())
+                        LLMaterialEditor::uploadMaterialFromModel(filename, model, i, material_dest, texture_dest.notNull() ? texture_dest : material_dest);
+                    else
+                        LLMaterialEditor::uploadMaterialFromModel(filename, model, i, dest);
                 }
             }
         }
     }
 }
 
-void do_bulk_upload(std::vector<std::string> filenames, bool allow_2k, const LLSD& notification, const LLSD& response)
+void do_bulk_upload(std::vector<std::string> filenames, bool allow_2k, const LLSD& notification, const LLSD& response, const LLUUID& dest)
 {
     S32 option = LLNotificationsUtil::getSelectedOption(notification, response);
     if (option != 0)
@@ -611,7 +715,7 @@ void do_bulk_upload(std::vector<std::string> filenames, bool allow_2k, const LLS
         return;
     }
 
-    do_bulk_upload(filenames, allow_2k);
+    do_bulk_upload(filenames, allow_2k, dest);
 }
 
 bool get_bulk_upload_expected_cost(
@@ -647,8 +751,31 @@ bool get_bulk_upload_expected_cost(
                 LLPointer<LLImageFormatted> image_frmted = LLImageFormatted::createFromType(codec);
                 if (gDirUtilp->fileExists(filename) && image_frmted && image_frmted->load(filename))
                 {
-                    S32 biased_width = LLImageRaw::biasedDimToPowerOfTwo(image_frmted->getWidth(), LLViewerFetchedTexture::MAX_IMAGE_SIZE_DEFAULT);
-                    S32 biased_height = LLImageRaw::biasedDimToPowerOfTwo(image_frmted->getHeight(), LLViewerFetchedTexture::MAX_IMAGE_SIZE_DEFAULT);
+                    S32 biased_width, biased_height;
+
+                    S32 max_width  = allow_2k ? gSavedSettings.getS32("max_texture_dimension_X") : 1024;
+                    S32 max_height = allow_2k ? gSavedSettings.getS32("max_texture_dimension_Y") : 1024;
+
+                    S32 orig_width  = image_frmted->getWidth();
+                    S32 orig_height = image_frmted->getHeight();
+
+                    if (orig_width > max_width || orig_height > max_height)
+                    {
+                        // Calculate scale factors
+                        F32 width_scale  = (F32)max_width / (F32)orig_width;
+                        F32 height_scale = (F32)max_height / (F32)orig_height;
+                        F32 scale        = llmin(width_scale, height_scale);
+
+                        // Calculate new dimensions, preserving aspect ratio
+                        biased_width = LLImageRaw::contractDimToPowerOfTwo(llclamp((S32)llroundf(orig_width * scale), 4, max_width));
+                        biased_height = LLImageRaw::contractDimToPowerOfTwo(llclamp((S32)llroundf(orig_height * scale), 4, max_height));
+                    }
+                    else
+                    {
+                        biased_width = LLImageRaw::biasedDimToPowerOfTwo(orig_width, LLViewerFetchedTexture::MAX_IMAGE_SIZE_DEFAULT);
+                        biased_height = LLImageRaw::biasedDimToPowerOfTwo(orig_height, LLViewerFetchedTexture::MAX_IMAGE_SIZE_DEFAULT);
+                    }
+
                     total_cost += LLAgentBenefitsMgr::current().getTextureUploadCost(biased_width, biased_height);
                     S32 area = biased_width * biased_height;
                     if (area >= LLAgentBenefits::MIN_2K_TEXTURE_AREA)
@@ -709,7 +836,7 @@ bool get_bulk_upload_expected_cost(
     return file_count > 0;
 }
 
-const void upload_bulk(const std::vector<std::string>& filtered_filenames, bool allow_2k)
+void upload_bulk(const std::vector<std::string>& filtered_filenames, bool allow_2k, const LLUUID& dest, const std::string& local_dir = "")
 {
     S32 expected_upload_cost;
     S32 expected_upload_count;
@@ -721,6 +848,9 @@ const void upload_bulk(const std::vector<std::string>& filtered_filenames, bool 
         key["upload_cost"] = expected_upload_cost;
         key["upload_count"] = expected_upload_count;
         key["has_2k_textures"] = (textures_2k_count > 0);
+        key["dest"] = dest;
+        if (!local_dir.empty())
+            key["local_dir"] = local_dir;
 
         LLSD array;
         for (const std::string& str : filtered_filenames)
@@ -754,7 +884,7 @@ const void upload_bulk(const std::vector<std::string>& filtered_filenames, bool 
 
 }
 
-const void upload_bulk(const std::vector<std::string>& filenames, LLFilePicker::ELoadFilter type, bool allow_2k)
+void upload_bulk(const std::vector<std::string>& filenames, LLFilePicker::ELoadFilter type, bool allow_2k, const LLUUID& dest)
 {
     // TODO:
     // Check user balance for entire cost
@@ -776,7 +906,7 @@ const void upload_bulk(const std::vector<std::string>& filenames, LLFilePicker::
             filtered_filenames.push_back(filename);
         }
     }
-    upload_bulk(filtered_filenames, allow_2k);
+    upload_bulk(filtered_filenames, allow_2k, dest);
 }
 
 class LLFileUploadImage : public view_listener_t
@@ -787,7 +917,7 @@ class LLFileUploadImage : public view_listener_t
         {
             gAgentCamera.changeCameraToDefault();
         }
-        LLFilePickerReplyThread::startPicker(boost::bind(&upload_single_file, _1, _2), LLFilePicker::FFLOAD_IMAGE, false);
+        LLFilePickerReplyThread::startPicker(boost::bind(&upload_single_file, _1, _2, LLUUID::null), LLFilePicker::FFLOAD_IMAGE, false);
         return true;
     }
 };
@@ -796,7 +926,23 @@ class LLFileUploadModel : public view_listener_t
 {
     bool handleEvent(const LLSD& userdata)
     {
-        LLFloaterModelPreview::showModelPreview();
+        if (LLConvexDecomposition::isFunctional())
+        {
+            LLFloaterModelPreview::showModelPreview();
+        }
+        else
+        {
+            if (gGLManager.mIsApple)
+            {
+                LLNotificationsUtil::add("ModelUploaderMissingPhysicsApple");
+            }
+            else
+            {
+                // TPV?
+                LLNotificationsUtil::add("ModelUploaderMissingPhysics");
+                LLFloaterModelPreview::showModelPreview();
+            }
+        }
         return true;
     }
 };
@@ -818,7 +964,7 @@ class LLFileUploadSound : public view_listener_t
         {
             gAgentCamera.changeCameraToDefault();
         }
-        LLFilePickerReplyThread::startPicker(boost::bind(&upload_single_file, _1, _2), LLFilePicker::FFLOAD_WAV, false);
+        LLFilePickerReplyThread::startPicker(boost::bind(&upload_single_file, _1, _2, LLUUID::null), LLFilePicker::FFLOAD_WAV, false);
         return true;
     }
 };
@@ -831,7 +977,7 @@ class LLFileUploadAnim : public view_listener_t
         {
             gAgentCamera.changeCameraToDefault();
         }
-        LLFilePickerReplyThread::startPicker(boost::bind(&upload_single_file, _1, _2), LLFilePicker::FFLOAD_ANIM, false);
+        LLFilePickerReplyThread::startPicker(boost::bind(&upload_single_file, _1, _2, LLUUID::null), LLFilePicker::FFLOAD_ANIM, false);
         return true;
     }
 };
@@ -844,7 +990,20 @@ class LLFileUploadBulk : public view_listener_t
         {
             gAgentCamera.changeCameraToDefault();
         }
-        LLFilePickerReplyThread::startPicker(boost::bind(&upload_bulk, _1, _2, true), LLFilePicker::FFLOAD_ALL, true);
+        LLFilePickerReplyThread::startPicker(boost::bind(static_cast<void(*)(const std::vector<std::string>&, LLFilePicker::ELoadFilter, bool, const LLUUID&)>(&upload_bulk), _1, _2, true, LLUUID::null), LLFilePicker::FFLOAD_ALL, true);
+        return true;
+    }
+};
+
+class LLFileUploadBulkFolder : public view_listener_t
+{
+    bool handleEvent(const LLSD& userdata)
+    {
+        if (gAgentCamera.cameraMouselook())
+        {
+            gAgentCamera.changeCameraToDefault();
+        }
+        (new LLDirPickerThread(boost::bind(&start_bulk_folder_upload_after_pick, _1, _2, LLUUID::null), ""))->getFile();
         return true;
     }
 };
@@ -1028,7 +1187,7 @@ void handle_compress_image()
 // so doing dirty, but OS independent fopen and fseek
 size_t get_file_size(std::string &filename)
 {
-    LLFILE* file = LLFile::fopen(filename, "rb");       /*Flawfinder: ignore*/
+    LLFILE* file = LLFile::fopen(filename, LLFILE_MODE("rb"));       /*Flawfinder: ignore*/
     if (!file)
     {
         LL_WARNS() << "Error opening " << filename << LL_ENDL;
@@ -1134,7 +1293,7 @@ LLUUID upload_new_resource(
         name, desc, compression_info,
         destination_folder_type, inv_type,
         next_owner_perms, group_perms, everyone_perms,
-        expected_upload_cost, show_inventory));
+        expected_upload_cost, LLUUID::null, show_inventory));
     upload_new_resource(uploadInfo, callback, userdata);
 
     return LLUUID::null;
@@ -1333,6 +1492,144 @@ void upload_new_resource(
 }
 
 
+static void collect_files_recursive(const std::string& local_dir, std::vector<std::string>& files)
+{
+    namespace bfs = boost::filesystem;
+    boost::system::error_code ec;
+    for (bfs::directory_iterator it(local_dir, ec), end; !ec && it != end; ++it)
+    {
+        boost::system::error_code ec2;
+        bfs::file_status st = it->status(ec2);
+        if (ec2) continue;
+        if (bfs::is_regular_file(st))
+            files.push_back(it->path().string());
+        else if (bfs::is_directory(st))
+            collect_files_recursive(it->path().string(), files);
+    }
+}
+
+// Upload GLB/GLTF files into "Materials" and "Textures" subfolders of dest.
+// Both subfolders are created first; then delegates to do_bulk_upload with
+// material_dest / texture_dest so textures don't land in the system folder.
+static void upload_gltf_files_to_subfolders(std::vector<std::string> gltf_files, const LLUUID& dest, bool allow_2k)
+{
+    gInventory.createNewCategory(dest, LLFolderType::FT_NONE, "Materials",
+        [gltf_files, dest, allow_2k](const LLUUID& mat_id)
+        {
+            LLUUID effective_mat = mat_id.notNull() ? mat_id : dest;
+            doOnIdleOneTime([gltf_files, dest, allow_2k, effective_mat]()
+            {
+                gInventory.createNewCategory(dest, LLFolderType::FT_NONE, "Textures",
+                    [gltf_files, allow_2k, effective_mat](const LLUUID& tex_id)
+                    {
+                        LLUUID effective_tex = tex_id.notNull() ? tex_id : effective_mat;
+                        doOnIdleOneTime([gltf_files, allow_2k, effective_mat, effective_tex]()
+                        {
+                            do_bulk_upload(gltf_files, allow_2k, effective_mat, effective_mat, effective_tex);
+                        });
+                    });
+            });
+        });
+}
+
+// Must only be called from the main coroutine.
+static void upload_folder_recursive_impl(const std::string& local_dir, const LLUUID& inv_parent_id, bool allow_2k)
+{
+    namespace bfs = boost::filesystem;
+    boost::system::error_code ec;
+    std::vector<std::string> regular_files;
+    std::vector<std::string> gltf_files;
+    std::vector<std::pair<std::string, std::string>> subdirs;
+
+    for (bfs::directory_iterator it(local_dir, ec), end; !ec && it != end; ++it)
+    {
+        boost::system::error_code ec2;
+        bfs::file_status st = it->status(ec2);
+        if (ec2) continue;
+        if (bfs::is_regular_file(st))
+        {
+            std::string path_str = it->path().string();
+            std::string ext = gDirUtilp->getExtension(path_str);
+            if (ext == "gltf" || ext == "glb")
+                gltf_files.push_back(path_str);
+            else
+                regular_files.push_back(path_str);
+        }
+        else if (bfs::is_directory(st))
+            subdirs.emplace_back(it->path().string(), it->path().filename().string());
+    }
+
+    if (!regular_files.empty())
+        do_bulk_upload(regular_files, allow_2k, inv_parent_id);
+
+    if (!gltf_files.empty())
+        upload_gltf_files_to_subfolders(gltf_files, inv_parent_id, allow_2k);
+
+    for (const auto& [sub_path, sub_name] : subdirs)
+    {
+        gInventory.createNewCategory(inv_parent_id, LLFolderType::FT_NONE, sub_name,
+            [sub_path, allow_2k](const LLUUID& new_cat_id)
+            {
+                if (new_cat_id.isNull())
+                    return;
+                doOnIdleOneTime([sub_path, new_cat_id, allow_2k]()
+                {
+                    upload_folder_recursive_impl(sub_path, new_cat_id, allow_2k);
+                });
+            });
+    }
+}
+
+void start_folder_recursive_upload(const std::string& local_dir, const LLUUID& dest, bool allow_2k)
+{
+    std::string folder_name = gDirUtilp->getBaseFileName(local_dir);
+    if (folder_name.empty())
+        folder_name = "Uploaded Folder";
+    // AIS rejects null parent; fall back to root inventory when no dest given
+    LLUUID parent = dest.notNull() ? dest : gInventory.getRootFolderID();
+    gInventory.createNewCategory(parent, LLFolderType::FT_NONE, folder_name,
+        [local_dir, allow_2k](const LLUUID& new_cat_id)
+        {
+            if (new_cat_id.isNull())
+                return;
+            doOnIdleOneTime([local_dir, new_cat_id, allow_2k]()
+            {
+                upload_folder_recursive_impl(local_dir, new_cat_id, allow_2k);
+            });
+        });
+}
+
+void start_bulk_folder_upload_after_pick(const std::vector<std::string>& dirs, const std::string& /*proposed_name*/, const LLUUID& dest)
+{
+    if (dirs.empty()) return;
+    const std::string local_dir = dirs[0];
+
+    struct ScanResult
+    {
+        std::vector<std::string> all_files;
+        std::atomic<bool> done { false };
+    };
+
+    auto result = std::make_shared<ScanResult>();
+
+    // Run the directory scan off the main thread to avoid freezing the viewer
+    // (especially on Mac where the dir picker also runs on the main thread).
+    std::thread([result, local_dir]()
+    {
+        collect_files_recursive(local_dir, result->all_files);
+        result->done.store(true, std::memory_order_release);
+    }).detach();
+
+    // Poll each frame until scan completes, then hand off to upload_bulk.
+    doOnIdleRepeating([result, local_dir, dest]() -> bool
+    {
+        if (!result->done.load(std::memory_order_acquire))
+            return false;
+        upload_bulk(result->all_files, true, dest, local_dir);
+        return true;
+    });
+}
+
 void init_menu_file()
 {
     view_listener_t::addCommit(new LLFileUploadImage(), "File.UploadImage");
@@ -1341,6 +1638,7 @@ void init_menu_file()
     view_listener_t::addCommit(new LLFileUploadModel(), "File.UploadModel");
     view_listener_t::addCommit(new LLFileUploadMaterial(), "File.UploadMaterial");
     view_listener_t::addCommit(new LLFileUploadBulk(), "File.UploadBulk");
+    view_listener_t::addCommit(new LLFileUploadBulkFolder(), "File.UploadBulkFolder");
     view_listener_t::addCommit(new LLFileCloseWindow(), "File.CloseWindow");
     view_listener_t::addCommit(new LLFileCloseAllWindows(), "File.CloseAllWindows");
     view_listener_t::addEnable(new LLFileEnableCloseWindow(), "File.EnableCloseWindow");

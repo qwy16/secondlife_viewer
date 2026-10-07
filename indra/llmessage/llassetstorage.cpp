@@ -453,6 +453,7 @@ bool LLAssetStorage::findInCacheAndInvokeCallback(const LLUUID& uuid, LLAssetTyp
     bool exists = LLFileSystem::getExists(uuid, type);
     if (exists)
     {
+        LL_PROFILE_ZONE_SCOPED;
         LLFileSystem file(uuid, type);
         U32 size = file.getSize();
         if (size > 0)
@@ -467,7 +468,7 @@ bool LLAssetStorage::findInCacheAndInvokeCallback(const LLUUID& uuid, LLAssetTyp
         else
         {
             LL_WARNS("AssetStorage") << "Asset vfile " << uuid << ":" << type
-                                     << " found in static cache with bad size " << file.getSize() << ", ignoring" << LL_ENDL;
+                                     << " found in static cache with bad size " << size << ", ignoring" << LL_ENDL;
         }
     }
     return false;
@@ -562,7 +563,7 @@ void LLAssetStorage::getAssetData(const LLUUID uuid,
                 if (callback == tmp->mDownCallback && user_data == tmp->mUserData)
                 {
                     // this is a duplicate from the same subsystem - throw it away
-                    LL_WARNS("AssetStorage") << "Discarding duplicate request for asset " << uuid
+                    LL_DEBUGS("AssetStorage") << "Discarding duplicate request for asset " << uuid
                                              << "." << LLAssetType::lookup(type) << LL_ENDL;
                     return;
                 }
@@ -1316,6 +1317,9 @@ const char* LLAssetStorage::getErrorString(S32 status)
         case LL_ERR_ASSET_REQUEST_NOT_IN_DATABASE:
             return "Asset request: asset not found in database";
 
+        case LL_ERR_NO_CAP:
+            return "Asset request: region or asset capability not available";
+
         case LL_ERR_EOF:
             return "End of file";
 
@@ -1402,7 +1406,7 @@ void LLAssetStorage::legacyGetDataCallback(const LLUUID &uuid,
         uuid.toString(uuid_str);
         filename = llformat("%s.%s",gDirUtilp->getExpandedFilename(LL_PATH_CACHE,uuid_str).c_str(),LLAssetType::lookup(type));
 
-        LLFILE* fp = LLFile::fopen(filename, "wb");     /* Flawfinder: ignore */
+        LLFILE* fp = LLFile::fopen(filename, LLFILE_MODE("wb")); /* Flawfinder: ignore */
         if (fp)
         {
             const S32 buf_size = 65536;

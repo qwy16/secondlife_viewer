@@ -636,7 +636,7 @@ void LLInventoryGallery::removeFromLastRow(LLInventoryGalleryItem* item)
     mItemPanels.pop_back();
 }
 
-LLInventoryGalleryItem* LLInventoryGallery::buildGalleryItem(std::string name, LLUUID item_id, LLAssetType::EType type, LLUUID thumbnail_id, LLInventoryType::EType inventory_type, U32 flags, time_t creation_date, bool is_link, bool is_worn)
+LLInventoryGalleryItem* LLInventoryGallery::buildGalleryItem(std::string name, LLUUID item_id, LLAssetType::EType type, LLUUID thumbnail_id, LLInventoryType::EType inventory_type, U32 flags, time_t creation_date, bool is_link, bool is_worn, bool is_favorite)
 {
     LLInventoryGalleryItem::Params giparams;
     giparams.visible = true;
@@ -647,6 +647,7 @@ LLInventoryGalleryItem* LLInventoryGallery::buildGalleryItem(std::string name, L
     gitem->setUUID(item_id);
     gitem->setGallery(this);
     gitem->setType(type, inventory_type, flags, is_link);
+    gitem->setFavorite(is_favorite);
     gitem->setLoadImmediately(mLoadThumbnailsImmediately);
     gitem->setThumbnail(thumbnail_id);
     gitem->setWorn(is_worn);
@@ -841,16 +842,14 @@ void LLInventoryGallery::onIdle(void* userdata)
     const F64 MAX_TIME_VISIBLE = 0.020f;
     const F64 MAX_TIME_HIDDEN = 0.001f; // take it slow
     const F64 max_time = visible ? MAX_TIME_VISIBLE : MAX_TIME_HIDDEN;
-    F64 curent_time = LLTimer::getTotalSeconds();
-    const F64 end_time = curent_time + max_time;
+    const F64 end_time = gIdleCallbacks.getStartTime() + max_time;
 
-    while (!self->mItemBuildQuery.empty() && end_time > curent_time)
+    while (!self->mItemBuildQuery.empty() && end_time > LLTimer::getTotalSeconds())
     {
         uuid_set_t::iterator iter = self->mItemBuildQuery.begin();
         LLUUID item_id = *iter;
         self->mNeedsArrange |= self->updateAddedItem(item_id);
         self->mItemBuildQuery.erase(iter);
-        curent_time = LLTimer::getTotalSeconds();
     }
 
     if (self->mNeedsArrange && visible)
@@ -939,8 +938,19 @@ bool LLInventoryGallery::updateAddedItem(LLUUID item_id)
     }
 
     bool res = false;
+    bool is_favorite = get_is_favorite(obj);
 
-    LLInventoryGalleryItem* item = buildGalleryItem(name, item_id, obj->getType(), thumbnail_id, inventory_type, misc_flags, obj->getCreationDate(), obj->getIsLinkType(), is_worn);
+    LLInventoryGalleryItem* item = buildGalleryItem(
+        name,
+        item_id,
+        obj->getType(),
+        thumbnail_id,
+        inventory_type,
+        misc_flags,
+        obj->getCreationDate(),
+        obj->getIsLinkType(),
+        is_worn,
+        is_favorite);
     mItemMap.insert(LLInventoryGallery::gallery_item_map_t::value_type(item_id, item));
     if (mGalleryCreated)
     {
@@ -977,7 +987,7 @@ void LLInventoryGallery::updateRemovedItem(LLUUID item_id)
     mItemBuildQuery.erase(item_id);
 }
 
-void LLInventoryGallery::updateChangedItemName(LLUUID item_id, std::string name)
+void LLInventoryGallery::updateChangedItemData(LLUUID item_id, std::string name, bool is_favorite)
 {
     gallery_item_map_t::iterator iter = mItemMap.find(item_id);
     if (iter != mItemMap.end())
@@ -986,6 +996,7 @@ void LLInventoryGallery::updateChangedItemName(LLUUID item_id, std::string name)
         if (item)
         {
             item->setItemName(name);
+            item->setFavorite(is_favorite);
         }
     }
 }
@@ -1713,7 +1724,7 @@ bool is_category_removable(const LLUUID& folder_id, bool check_worn)
         }
     }
 
-    const LLUUID mp_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+    const LLUUID mp_id = gInventory.getMarketplaceListingsUUID();
     if (mp_id.notNull() && gInventory.isObjectDescendentOf(folder_id, mp_id))
     {
         return false;
@@ -1755,7 +1766,7 @@ void LLInventoryGallery::paste()
         return;
     }
 
-    const LLUUID& marketplacelistings_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+    const LLUUID& marketplacelistings_id = gInventory.getMarketplaceListingsUUID();
     if (mSelectedItemIDs.size() == 1 && gInventory.isObjectDescendentOf(*mSelectedItemIDs.begin(), marketplacelistings_id))
     {
         return;
@@ -1803,8 +1814,8 @@ void LLInventoryGallery::paste(const LLUUID& dest,
                                const LLUUID& marketplacelistings_id)
 {
     LLHandle<LLPanel> handle = getHandle();
-    std::function <void(const LLUUID)> on_copy_callback = NULL;
-    LLPointer<LLInventoryCallback> cb = NULL;
+    std::function<void(const LLUUID)> on_copy_callback = nullptr;
+    LLPointer<LLInventoryCallback> cb = nullptr;
     if (dest == mFolderID)
     {
         on_copy_callback = [handle](const LLUUID& inv_item)
@@ -2001,7 +2012,7 @@ void LLInventoryGallery::deleteSelection()
 
             for (LLInventoryModel::item_array_t::value_type& item : items)
             {
-                if (get_is_item_worn(item))
+                if (!item->getIsLinkType() && get_is_item_worn(item))
                 {
                     has_worn = true;
                     LLWearableType::EType type = item->getWearableType();
@@ -2022,7 +2033,7 @@ void LLInventoryGallery::deleteSelection()
         }
 
         LLViewerInventoryItem* item = gInventory.getItem(id);
-        if (item && get_is_item_worn(item))
+        if (item && !item->getIsLinkType() && get_is_item_worn(item))
         {
             has_worn = true;
             LLWearableType::EType type = item->getWearableType();
@@ -2101,11 +2112,35 @@ void LLInventoryGallery::pasteAsLink()
     }
 
     const LLUUID& current_outfit_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_CURRENT_OUTFIT);
-    const LLUUID& marketplacelistings_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+    const LLUUID& marketplacelistings_id = gInventory.getMarketplaceListingsUUID();
     const LLUUID& my_outifts_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_MY_OUTFITS);
 
     std::vector<LLUUID> objects;
     LLClipboard::instance().pasteFromClipboard(objects);
+
+    if (objects.size() == 0)
+    {
+        LLClipboard::instance().setCutMode(false);
+        return;
+    }
+
+    LLUUID& first_id = objects[0];
+    LLInventoryItem* item = gInventory.getItem(first_id);
+    if (item && item->getAssetUUID().isNull())
+    {
+        if (item->getActualType() == LLAssetType::AT_NOTECARD)
+        {
+            LLNotificationsUtil::add("CantLinkNotecard");
+            LLClipboard::instance().setCutMode(false);
+            return;
+        }
+        else if (item->getActualType() == LLAssetType::AT_MATERIAL)
+        {
+            LLNotificationsUtil::add("CantLinkMaterial");
+            LLClipboard::instance().setCutMode(false);
+            return;
+        }
+    }
 
     bool paste_into_root = mSelectedItemIDs.empty();
     for (LLUUID& dest : mSelectedItemIDs)
@@ -2335,7 +2370,7 @@ void LLInventoryGallery::refreshList(const LLUUID& category_id)
             return;
         }
 
-        updateChangedItemName(*items_iter, obj->getName());
+        updateChangedItemData(*items_iter, obj->getName(), get_is_favorite(obj));
         mNeedsArrange = true;
     }
 
@@ -2851,6 +2886,14 @@ void LLInventoryGalleryItem::setType(LLAssetType::EType type, LLInventoryType::E
     getChild<LLIconCtrl>("link_overlay")->setVisible(is_link);
 }
 
+void LLInventoryGalleryItem::setFavorite(bool is_favorite)
+{
+    getChild<LLIconCtrl>("fav_icon")->setVisible(is_favorite);
+    static const LLUIColor text_color = LLUIColorTable::instance().getColor("LabelTextColor", LLColor4::white);
+    static const LLUIColor favorite_color = LLUIColorTable::instance().getColor("InventoryFavoriteColor", LLColor4::white);
+    mNameText->setReadOnlyColor(is_favorite ? favorite_color : text_color);
+}
+
 void LLInventoryGalleryItem::setThumbnail(LLUUID id)
 {
     mDefaultImage = id.isNull();
@@ -3288,7 +3331,7 @@ bool dragItemIntoFolder(LLUUID folder_id, LLInventoryItem* inv_item, bool drop, 
     const LLUUID &current_outfit_id = model->findCategoryUUIDForType(LLFolderType::FT_CURRENT_OUTFIT);
     const LLUUID &favorites_id = model->findCategoryUUIDForType(LLFolderType::FT_FAVORITE);
     const LLUUID &landmarks_id = model->findCategoryUUIDForType(LLFolderType::FT_LANDMARK);
-    const LLUUID &marketplacelistings_id = model->findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+    const LLUUID& marketplacelistings_id = model->getMarketplaceListingsUUID();
     const LLUUID &my_outifts_id = model->findCategoryUUIDForType(LLFolderType::FT_MY_OUTFITS);
 
     const bool move_is_into_current_outfit = (folder_id == current_outfit_id);
@@ -3537,12 +3580,12 @@ bool dragItemIntoFolder(LLUUID folder_id, LLInventoryItem* inv_item, bool drop, 
 
         if (accept && drop)
         {
-            std::shared_ptr<LLMoveInv> move_inv (new LLMoveInv());
+            std::shared_ptr<LLMoveInv> move_inv = std::make_shared<LLMoveInv>();
             move_inv->mObjectID = inv_item->getParentUUID();
             std::pair<LLUUID, LLUUID> item_pair(folder_id, inv_item->getUUID());
             move_inv->mMoveList.push_back(item_pair);
-            move_inv->mCallback = NULL;
-            move_inv->mUserData = NULL;
+            move_inv->mCallback = nullptr;
+            move_inv->mUserData = nullptr;
             if (is_move)
             {
                 warn_move_inventory(object, move_inv);
@@ -3682,7 +3725,7 @@ bool dragCategoryIntoFolder(LLUUID dest_id, LLInventoryCategory* inv_cat,
 
     const LLUUID &cat_id = inv_cat->getUUID();
     const LLUUID &current_outfit_id = model->findCategoryUUIDForType(LLFolderType::FT_CURRENT_OUTFIT);
-    const LLUUID &marketplacelistings_id = model->findCategoryUUIDForType(LLFolderType::FT_MARKETPLACE_LISTINGS);
+    const LLUUID& marketplacelistings_id = model->getMarketplaceListingsUUID();
     //const LLUUID from_folder_uuid = inv_cat->getParentUUID();
     const bool move_is_into_current_outfit = (dest_id == current_outfit_id);
     const bool move_is_into_marketplacelistings = model->isObjectDescendentOf(dest_id, marketplacelistings_id);

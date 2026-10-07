@@ -40,8 +40,9 @@
 /////////////////////////////
 #include "llquaternion.h"
 
-class LLQuaternion2
+class alignas(16) LLQuaternion2
 {
+    LL_ALIGN_NEW
 public:
 
     //////////////////////////
@@ -49,7 +50,7 @@ public:
     //////////////////////////
 
     // Ctor
-    LLQuaternion2() {}
+    LLQuaternion2() = default;
 
     // Ctor from LLQuaternion
     explicit LLQuaternion2( const class LLQuaternion& quat );
@@ -101,5 +102,7 @@ protected:
     LLVector4a mQ;
 
 };
+
+static_assert(std::is_trivial<LLQuaternion2>::value, "LLQuaternion2 must be a trivial type");
 
 #endif

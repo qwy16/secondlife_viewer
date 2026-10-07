@@ -33,15 +33,10 @@
 #include <sys/param.h>  // Need PATH_MAX in APR headers...
 #endif
 
-#include <boost/noncopyable.hpp>
 #include "llwin32headers.h"
 #include "apr_thread_proc.h"
-#include "apr_getopt.h"
-#include "apr_signal.h"
 
-#include "llstring.h"
-
-#include "mutex.h"
+#include <mutex>
 
 struct apr_dso_handle_t;
 /**
@@ -145,7 +140,7 @@ private:
 //      2, a global pool.
 //
 
-class LL_COMMON_API LLAPRFile : boost::noncopyable
+class LL_COMMON_API LLAPRFile
 {
     // make this non copyable since a copy closes the file
 private:
@@ -153,9 +148,12 @@ private:
     LLVolatileAPRPool *mCurrentFilePoolp ; //currently in use apr_pool, could be one of them: sAPRFilePoolp, or a temp pool.
 
 public:
-    LLAPRFile() ;
+    LLAPRFile();
     LLAPRFile(const std::string& filename, apr_int32_t flags, LLVolatileAPRPool* pool = NULL);
-    ~LLAPRFile() ;
+    ~LLAPRFile();
+
+    LLAPRFile(const LLAPRFile&) = delete;
+    LLAPRFile& operator=(const LLAPRFile&) = delete;
 
     apr_status_t open(const std::string& filename, apr_int32_t flags, LLVolatileAPRPool* pool = NULL, S32* sizep = NULL);
     apr_status_t open(const std::string& filename, apr_int32_t flags, bool use_global_pool); //use gAPRPoolp.
@@ -182,20 +180,7 @@ private:
     static apr_file_t* open(const std::string& filename, apr_pool_t* apr_pool, apr_int32_t flags);
     static apr_status_t close(apr_file_t* file) ;
     static S32 seek(apr_file_t* file, apr_seek_where_t where, S32 offset);
-public:
-    // returns false if failure:
-    static bool remove(const std::string& filename, LLVolatileAPRPool* pool = NULL);
-    static bool rename(const std::string& filename, const std::string& newname, LLVolatileAPRPool* pool = NULL);
-    static bool isExist(const std::string& filename, LLVolatileAPRPool* pool = NULL, apr_int32_t flags = APR_READ);
-    static S32 size(const std::string& filename, LLVolatileAPRPool* pool = NULL);
-    static bool makeDir(const std::string& dirname, LLVolatileAPRPool* pool = NULL);
-    static bool removeDir(const std::string& dirname, LLVolatileAPRPool* pool = NULL);
-
-    // Returns bytes read/written, 0 if read/write fails:
-    static S32 readEx(const std::string& filename, void *buf, S32 offset, S32 nbytes, LLVolatileAPRPool* pool = NULL);
-    static S32 writeEx(const std::string& filename, const void *buf, S32 offset, S32 nbytes, LLVolatileAPRPool* pool = NULL); // offset<0 means append
 //*******************************************************************************************************************************
 };
-
 
 #endif // LL_LLAPR_H

@@ -32,11 +32,11 @@
 
 const F32 FOCUS_FADE_TIME = 0.3f;
 
-LLFocusableElement::LLFocusableElement()
-:   mFocusLostCallback(NULL),
-    mFocusReceivedCallback(NULL),
-    mFocusChangedCallback(NULL),
-    mTopLostCallback(NULL)
+LLFocusableElement::LLFocusableElement() :
+    mFocusLostCallback(nullptr),
+    mFocusReceivedCallback(nullptr),
+    mFocusChangedCallback(nullptr),
+    mTopLostCallback(nullptr)
 {
 }
 
@@ -462,6 +462,11 @@ void LLFocusMgr::unlockFocus()
 F32 LLFocusMgr::getFocusFlashAmt() const
 {
     return clamp_rescale(mFocusFlashTimer.getElapsedTimeF32(), 0.f, FOCUS_FADE_TIME, 1.f, 0.f);
+}
+
+S32 LLFocusMgr::getFocusFlashWidth() const
+{
+    return ll_round(lerp(1.f, 2.f, getFocusFlashAmt()));
 }
 
 LLColor4 LLFocusMgr::getFocusColor() const

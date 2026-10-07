@@ -143,7 +143,6 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
     gGL.setColorMask(true, true);
 
     LLColor3 light_diffuse(0, 0, 0);
-    F32      light_exp = 0.0f;
 
     LLEnvironment& environment = LLEnvironment::instance();
     LLSettingsWater::ptr_t pwater = environment.getCurrentWater();
@@ -170,7 +169,6 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
     // Apply magic numbers translating light direction into intensities
     light_dir.normalize();
     F32 ground_proj_sq = light_dir.mV[0] * light_dir.mV[0] + light_dir.mV[1] * light_dir.mV[1];
-    light_exp          = llmax(32.f, 256.f * powf(ground_proj_sq, 16.0f));
     if (0.f < light_diffuse.normalize())  // Normalizing a color? Puzzling...
     {
         light_diffuse *= (1.5f + (6.f * ground_proj_sq));
@@ -206,22 +204,22 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
 
     if (tex_a && (!tex_b || (tex_a == tex_b)))
     {
-        shader->bindTexture(LLViewerShaderMgr::BUMP_MAP, tex_a);
         tex_a->setFilteringOption(filter_mode);
+        shader->bindTexture(LLViewerShaderMgr::BUMP_MAP, tex_a);
         blend_factor = 0; // only one tex provided, no blending
     }
     else if (tex_b && !tex_a)
     {
-        shader->bindTexture(LLViewerShaderMgr::BUMP_MAP, tex_b);
         tex_b->setFilteringOption(filter_mode);
+        shader->bindTexture(LLViewerShaderMgr::BUMP_MAP, tex_b);
         blend_factor = 0; // only one tex provided, no blending
     }
     else if (tex_b != tex_a)
     {
-        shader->bindTexture(LLViewerShaderMgr::BUMP_MAP, tex_a);
         tex_a->setFilteringOption(filter_mode);
-        shader->bindTexture(LLViewerShaderMgr::BUMP_MAP2, tex_b);
         tex_b->setFilteringOption(filter_mode);
+        shader->bindTexture(LLViewerShaderMgr::BUMP_MAP, tex_a);
+        shader->bindTexture(LLViewerShaderMgr::BUMP_MAP2, tex_b);
     }
 
     shader->bindTexture(LLShaderMgr::WATER_EXCLUSIONTEX, &gPipeline.mWaterExclusionMask);

@@ -27,8 +27,9 @@
 #ifndef LL_LLCALLBACKLIST_H
 #define LL_LLCALLBACKLIST_H
 
-#include "llstl.h"
-#include <boost/function.hpp>
+#include "stdtypes.h"
+
+#include <functional>
 #include <list>
 
 class LLCallbackList
@@ -50,6 +51,17 @@ public:
     void callFunctions();                                                       // calls all functions
     void deleteAllFunctions();
 
+    // Wall-clock time (LLTimer::getTotalSeconds() units) at which this pass
+    // of callFunctions() began.
+    F64 getStartTime() const
+    {
+        llassert(mInCallFunctions);
+        return mCallStartTime;
+    }
+
+    // True while executing inside callFunctions()
+    bool isInCallFunctions() const { return mInCallFunctions; }
+
     static void test();
 
 protected:
@@ -57,10 +69,12 @@ protected:
     inline callback_list_t::iterator find(callback_t func, void *data);
 
     callback_list_t mCallbackList;
+    F64 mCallStartTime = 0.0;
+    bool mInCallFunctions = false;
 };
 
-typedef boost::function<void ()> nullary_func_t;
-typedef boost::function<bool ()> bool_func_t;
+typedef std::function<void ()> nullary_func_t;
+typedef std::function<bool ()> bool_func_t;
 
 // Call a given callable once in idle loop.
 void doOnIdleOneTime(nullary_func_t callable);

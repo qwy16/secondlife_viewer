@@ -30,6 +30,7 @@
 
 // viewer includes
 #include "llagent.h"
+#include "llcallbacklist.h"
 #include "llfolderviewmodel.h"
 #include "llfolderviewitem.h"
 #include "llinventorymodel.h"
@@ -64,6 +65,7 @@ LLInventoryFilter::FilterOps::FilterOps(const Params& p)
     mFilterUUID(p.uuid),
     mFilterLinks(p.links),
     mFilterThumbnails(p.thumbnails),
+    mFilterFavorites(p.favorites),
     mSearchVisibility(p.search_visibility)
 {
 }
@@ -159,6 +161,7 @@ bool LLInventoryFilter::check(const LLFolderViewModelItem* item)
     passed = passed && checkAgainstCreator(listener);
     passed = passed && checkAgainstSearchVisibility(listener);
 
+    passed = passed && checkAgainstFilterFavorites(listener->getUUID());
     passed = passed && checkAgainstFilterThumbnails(listener->getUUID());
 
     return passed;
@@ -221,6 +224,19 @@ bool LLInventoryFilter::checkFolder(const LLUUID& folder_id) const
         return false;
     }
 
+    const LLViewerInventoryCategory* cat = gInventory.getCategory(folder_id);
+    if (cat && cat->getIsFavorite())
+    {
+        if (mFilterOps.mFilterFavorites == FILTER_ONLY_FAVORITES)
+        {
+            return true;
+        }
+        if (mFilterOps.mFilterFavorites == FILTER_EXCLUDE_FAVORITES)
+        {
+            return false;
+        }
+    }
+
     // Marketplace folder filtering
     const U32 filterTypes = mFilterOps.mFilterTypes;
     const U32 marketplace_filter = FILTERTYPE_MARKETPLACE_ACTIVE | FILTERTYPE_MARKETPLACE_INACTIVE |
@@ -270,6 +286,16 @@ bool LLInventoryFilter::checkFolder(const LLUUID& folder_id) const
                     return false;
                 }
             }
+        }
+    }
+
+    if (filterTypes & FILTERTYPE_NO_TRASH_ITEMS)
+    {
+        const LLUUID trash_uuid = gInventory.findCategoryUUIDForType(LLFolderType::FT_TRASH);
+        // If not a descendant of the marketplace listings root, then the nesting depth is -1 by definition
+        if (gInventory.isObjectDescendentOf(folder_id, trash_uuid))
+        {
+            return false;
         }
     }
 
@@ -611,6 +637,24 @@ bool LLInventoryFilter::checkAgainstFilterThumbnails(const LLUUID& object_id) co
     return true;
 }
 
+bool LLInventoryFilter::checkAgainstFilterFavorites(const LLUUID& object_id) const
+{
+    const LLInventoryObject* object = gInventory.getObject(object_id);
+    if (!object) return true;
+
+
+    if (mFilterOps.mFilterFavorites != FILTER_INCLUDE_FAVORITES)
+    {
+        bool is_favorite = get_is_favorite(object);
+        if (is_favorite && (mFilterOps.mFilterFavorites == FILTER_EXCLUDE_FAVORITES))
+            return false;
+        if (!is_favorite && (mFilterOps.mFilterFavorites == FILTER_ONLY_FAVORITES))
+            return false;
+    }
+
+    return true;
+}
+
 bool LLInventoryFilter::checkAgainstCreator(const LLFolderViewModelItemInventory* listener) const
 {
     if (!listener)
@@ -811,6 +855,32 @@ void LLInventoryFilter::setFilterThumbnails(U64 filter_thumbnails)
     mFilterOps.mFilterThumbnails = filter_thumbnails;
 }
 
+void LLInventoryFilter::setFilterFavorites(U64 filter_favorites)
+{
+    if (mFilterOps.mFilterFavorites != filter_favorites)
+    {
+        if (mFilterOps.mFilterFavorites == FILTER_EXCLUDE_FAVORITES
+            && filter_favorites == FILTER_ONLY_FAVORITES)
+        {
+            setModified(FILTER_RESTART);
+        }
+        else if (mFilterOps.mFilterFavorites == FILTER_ONLY_FAVORITES
+            && filter_favorites == FILTER_EXCLUDE_FAVORITES)
+        {
+            setModified(FILTER_RESTART);
+        }
+        else if (mFilterOps.mFilterFavorites == FILTER_INCLUDE_FAVORITES)
+        {
+            setModified(FILTER_MORE_RESTRICTIVE);
+        }
+        else
+        {
+            setModified(FILTER_LESS_RESTRICTIVE);
+        }
+    }
+    mFilterOps.mFilterFavorites = filter_favorites;
+}
+
 void LLInventoryFilter::setFilterEmptySystemFolders()
 {
     mFilterOps.mFilterTypes |= FILTERTYPE_EMPTYFOLDERS;
@@ -921,6 +991,11 @@ void LLInventoryFilter::toggleSearchVisibilityLibrary()
     {
         setModified(hide_library ? FILTER_MORE_RESTRICTIVE : FILTER_LESS_RESTRICTIVE);
     }
+}
+
+void LLInventoryFilter::setFilterNoTrashFolder()
+{
+    mFilterOps.mFilterTypes |= FILTERTYPE_NO_TRASH_ITEMS;
 }
 
 void LLInventoryFilter::setFilterNoMarketplaceFolder()
@@ -1615,6 +1690,11 @@ U64 LLInventoryFilter::getFilterThumbnails() const
     return mFilterOps.mFilterThumbnails;
 }
 
+U64 LLInventoryFilter::getFilterFavorites() const
+{
+    return mFilterOps.mFilterFavorites;
+}
+
 bool LLInventoryFilter::hasFilterString() const
 {
     return mFilterSubString.size() > 0;
@@ -1664,8 +1744,18 @@ bool LLInventoryFilter::isTimedOut()
 
 void LLInventoryFilter::resetTime(S32 timeout)
 {
-    mFilterTime.reset();
     F32 time_in_sec = (F32)(timeout)/1000.0f;
+
+    if (gIdleCallbacks.isInCallFunctions())
+    {
+        // LLInventoryFilter is used in a variety of places, including
+        // gIdleCallbacks. If we are inside gIdleCallbacks, use
+        // gIdleCallbacks's time instead of unattached time limit.
+        F64 elapsed_since_pass_start = LLTimer::getTotalSeconds() - gIdleCallbacks.getStartTime();
+        time_in_sec -= (F32)llmax(elapsed_since_pass_start, 0.0);
+    }
+
+    mFilterTime.reset();
     mFilterTime.setTimerExpirySec(time_in_sec);
 }
 

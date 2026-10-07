@@ -30,6 +30,7 @@
 
 #include "llbutton.h"
 #include "llfocusmgr.h"
+#include "llimview.h"
 #include "llnotifications.h"
 #include "llviewercontrol.h"
 
@@ -117,7 +118,7 @@ LLToast::LLToast(const LLToast::Params& p)
     mIsFading(false),
     mIsHovered(false)
 {
-    mTimer.reset(new LLToastLifeTimer(this, p.lifetime_secs));
+    mTimer = std::make_unique<LLToastLifeTimer>(this, p.lifetime_secs);
 
     buildFromFile("panel_toast.xml");
 
@@ -140,7 +141,7 @@ LLToast::LLToast(const LLToast::Params& p)
     }
 
     // init callbacks if present
-    if(!p.on_delete_toast().empty())
+    if (p.on_delete_toast() != nullptr)
     {
         mOnDeleteToastSignal.connect(p.on_delete_toast());
     }
@@ -167,7 +168,34 @@ bool LLToast::postBuild()
         mTimer->stop();
     }
 
+    updateUniqueName();
+
     return true;
+}
+
+//--------------------------------------------------------------------------
+void LLToast::updateUniqueName()
+{
+    // Several toasts can be alive at once for the same session/group, so unique notification id is needed.
+    // Session/group id provides a filterable name prefix for LEAP.
+    LLUUID context_id = mSessionID;
+    if (mSessionID.notNull())
+    {
+        LLIMModel::LLIMSession* session = LLIMModel::getInstance()->findIMSession(mSessionID);
+        if (session && session->isP2PSessionType())
+        {
+            context_id = session->mOtherParticipantID;
+        }
+    }
+
+    std::string name = "toast_";
+    if (context_id.notNull())
+    {
+        name += context_id.asString() + "_";
+    }
+    name += mNotificationID.asString();
+
+    setName(name);
 }
 
 //--------------------------------------------------------------------------
@@ -421,7 +449,7 @@ void LLToast::setVisible(bool show)
         if(mHideBtn)
             mHideBtn->setVisible(show);
     }
-    LLFloater::setVisible(show);
+    LLModalDialog::setVisible(show);
     if (mPanel
         && !mPanel->isDead()
         && mWrapperPanel

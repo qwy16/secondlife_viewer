@@ -112,6 +112,7 @@ private:
     //--------------------------------------------------------------------
 public:
     void switchCameraPreset(ECameraPreset preset);
+    ECameraPreset getCameraPreset() const { return mCameraPreset; }
     /** Determines default camera offset depending on the current camera preset */
     LLVector3 getCameraOffsetInitial();
     /** Determines default focus offset depending on the current camera preset */
@@ -138,15 +139,17 @@ private:
     //--------------------------------------------------------------------
 public:
     LLVector3d      getCameraPositionGlobal() const;
-    const LLVector3 &getCameraPositionAgent() const;
+    const LLVector3& getCameraPositionAgent() const;
     LLVector3d      calcCameraPositionTargetGlobal(bool *hit_limit = NULL); // Calculate the camera position target
     F32             getCameraMinOffGround();        // Minimum height off ground for this mode, meters
     void            setCameraCollidePlane(const LLVector4 &plane) { mCameraCollidePlane = plane; }
     bool            calcCameraMinDistance(F32 &obj_min_distance);
-    F32             getCurrentCameraBuildOffset()   { return (F32)mCameraFocusOffset.length(); }
+    F32             getCurrentCameraBuildOffset() const { return (F32)mCameraFocusOffset.length(); }
     void            clearCameraLag() { mCameraLag.clearVec(); }
+    const LLVector3& getCameraUpVector() const { return mCameraUpVector; }
 private:
     LLVector3       getAvatarRootPosition();
+    void            setCameraSmoothingLastPositionGlobal(const LLVector3d& camera_position_global);
 
     F32             mCurrentCameraDistance;         // Current camera offset from avatar
     F32             mTargetCameraDistance;          // Target camera offset from avatar
@@ -154,10 +157,11 @@ private:
     F32             mCameraCurrentFOVZoomFactor;    // Interpolated fov zoom
     LLVector4       mCameraCollidePlane;            // Colliding plane for camera
     F32             mCameraZoomFraction;            // Mousewheel driven fraction of zoom
-    LLVector3       mCameraPositionAgent;           // Camera position in agent coordinates
     LLVector3       mCameraVirtualPositionAgent;    // Camera virtual position (target) before performing FOV zoom
     LLVector3d      mCameraSmoothingLastPositionGlobal;
     LLVector3d      mCameraSmoothingLastPositionAgent;
+    LLVector3d      mCameraSmoothingLastFocusGlobal;
+    bool            mCameraSmoothingLastFocusValid;
     bool            mCameraSmoothingStop;
     LLVector3       mCameraLag;                     // Third person camera lag
     LLVector3       mCameraUpVector;                // Camera's up direction in world coordinates (determines the 'roll' of the view)
@@ -167,6 +171,7 @@ private:
     //--------------------------------------------------------------------
 public:
     bool            isfollowCamLocked();
+    void            notifyFollowCamParamsCleared();
 private:
     LLFollowCam     mFollowCam;             // Ventrella
 
@@ -226,6 +231,7 @@ private:
     LLVector3d      mCameraFocusOffsetTarget;       // Target towards which we are lerping the camera's focus offset
     bool            mFocusOnAvatar;
     bool            mAllowChangeToFollow;
+    F64             mLastValidFollowCamParamsTime;
     LLVector3d      mFocusGlobal;
     LLVector3d      mFocusTargetGlobal;
     LLPointer<LLViewerObject> mFocusObject;
@@ -278,7 +284,7 @@ public:
     F32             getAgentHUDTargetZoom();
 
     void            resetCameraZoomFraction();
-    F32             getCurrentCameraZoomFraction() { return mCameraZoomFraction; }
+    F32             getCurrentCameraZoomFraction() const { return mCameraZoomFraction; }
 
     //--------------------------------------------------------------------
     // Pan

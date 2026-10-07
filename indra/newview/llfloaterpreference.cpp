@@ -346,6 +346,7 @@ LLFloaterPreference::LLFloaterPreference(const LLSD& key)
     mCommitCallbackRegistrar.add("Pref.RememberedUsernames",    boost::bind(&LLFloaterPreference::onClickRememberedUsernames, this));
     mCommitCallbackRegistrar.add("Pref.SpellChecker",           boost::bind(&LLFloaterPreference::onClickSpellChecker, this));
     mCommitCallbackRegistrar.add("Pref.Advanced",               boost::bind(&LLFloaterPreference::onClickAdvanced, this));
+    mCommitCallbackRegistrar.add("Pref.Scripting",              boost::bind(&LLFloaterPreference::onClickScriptingPerfs, this));
 
     sSkin = gSavedSettings.getString("SkinCurrent");
 
@@ -366,6 +367,11 @@ LLFloaterPreference::LLFloaterPreference(const LLSD& key)
     mCommitCallbackRegistrar.add("Pref.ClearLog",               boost::bind(&LLConversationLog::onClearLog, &LLConversationLog::instance()));
     mCommitCallbackRegistrar.add("Pref.DeleteTranscripts",      boost::bind(&LLFloaterPreference::onDeleteTranscripts, this));
     mCommitCallbackRegistrar.add("UpdateFilter", boost::bind(&LLFloaterPreference::onUpdateFilterTerm, this, false)); // <FS:ND/> Hook up for filtering
+#ifdef LL_DISCORD
+    gSavedSettings.getControl("EnableDiscord")->getCommitSignal()->connect(boost::bind(&LLAppViewer::updateDiscordActivity));
+    gSavedSettings.getControl("ShowDiscordActivityDetails")->getCommitSignal()->connect(boost::bind(&LLAppViewer::updateDiscordActivity));
+    gSavedSettings.getControl("ShowDiscordActivityState")->getCommitSignal()->connect(boost::bind(&LLAppViewer::updateDiscordActivity));
+#endif
 }
 
 void LLFloaterPreference::processProperties( void* pData, EAvatarProcessorType type )
@@ -405,11 +411,11 @@ void LLFloaterPreference::saveAvatarPropertiesCoro(const std::string cap_url, bo
 {
     LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
     LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t
-        httpAdapter(new LLCoreHttpUtil::HttpCoroutineAdapter("put_avatar_properties_coro", httpPolicy));
-    LLCore::HttpRequest::ptr_t httpRequest(new LLCore::HttpRequest);
+        httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>("put_avatar_properties_coro", httpPolicy);
+    LLCore::HttpRequest::ptr_t httpRequest = std::make_shared<LLCore::HttpRequest>();
     LLCore::HttpHeaders::ptr_t httpHeaders;
 
-    LLCore::HttpOptions::ptr_t httpOpts(new LLCore::HttpOptions);
+    LLCore::HttpOptions::ptr_t httpOpts = std::make_shared<LLCore::HttpOptions>();
     httpOpts->setFollowRedirects(true);
 
     std::string finalUrl = cap_url + "/" + gAgentID.asString();
@@ -469,7 +475,10 @@ bool LLFloaterPreference::postBuild()
 
     getChild<LLUICtrl>("log_path_string")->setEnabled(false); // make it read-only but selectable
 
-    getChild<LLComboBox>("language_combobox")->setCommitCallback(boost::bind(&LLFloaterPreference::onLanguageChange, this));
+    mLanguageCombobox = getChild<LLComboBox>("language_combobox");
+    mLanguageCombobox->setCommitCallback(boost::bind(&LLFloaterPreference::onLanguageChange, this));
+    mTimeFormatCombobox = getChild<LLComboBox>("time_format_combobox");
+    mTimeFormatCombobox->setCommitCallback(boost::bind(&LLFloaterPreference::onTimeFormatChange, this));
 
     getChild<LLComboBox>("FriendIMOptions")->setCommitCallback(boost::bind(&LLFloaterPreference::onNotificationsChange, this,"FriendIMOptions"));
     getChild<LLComboBox>("NonFriendIMOptions")->setCommitCallback(boost::bind(&LLFloaterPreference::onNotificationsChange, this,"NonFriendIMOptions"));
@@ -509,19 +518,24 @@ bool LLFloaterPreference::postBuild()
         std::map<std::string, std::string>::iterator iter = labels.find(system_lang);
         if (iter != labels.end())
         {
-            getChild<LLComboBox>("language_combobox")->add(iter->second, LLSD("default"), ADD_TOP, true);
+            mLanguageCombobox->add(iter->second, LLSD("default"), ADD_TOP, true);
         }
         else
         {
             LL_WARNS() << "Language \"" << system_lang << "\" is not in default_languages.xml" << LL_ENDL;
-            getChild<LLComboBox>("language_combobox")->add("System default", LLSD("default"), ADD_TOP, true);
+            mLanguageCombobox->add("System default", LLSD("default"), ADD_TOP, true);
         }
     }
     else
     {
         LL_WARNS() << "Failed to load labels from " << user_filename << ". Using default." << LL_ENDL;
-        getChild<LLComboBox>("language_combobox")->add("System default", LLSD("default"), ADD_TOP, true);
+        mLanguageCombobox->add("System default", LLSD("default"), ADD_TOP, true);
     }
+
+#ifndef LL_DISCORD
+    LLPanel* panel = getChild<LLPanel>("privacy_preferences_discord");
+    getChild<LLTabContainer>("privacy_tab_container")->removeTabPanel(panel);
+#endif
 
     return true;
 }
@@ -606,8 +620,6 @@ void LLFloaterPreference::apply()
 
     std::string cache_location = gDirUtilp->getExpandedFilename(LL_PATH_CACHE, "");
     setCacheLocation(cache_location);
-
-    LLViewerMedia::getInstance()->setCookiesEnabled(getChild<LLUICtrl>("cookies_enabled")->getValue());
 
     if (hasChild("web_proxy_enabled", true) &&hasChild("web_proxy_editor", true) && hasChild("web_proxy_port", true))
     {
@@ -748,6 +760,7 @@ void LLFloaterPreference::onOpen(const LLSD& key)
 
     // Forget previous language changes.
     mLanguageChanged = false;
+    mLastQualityLevel = gSavedSettings.getU32("RenderQualityPerformance");
 
     // Display selected maturity icons.
     onChangeMaturity();
@@ -760,6 +773,17 @@ void LLFloaterPreference::onOpen(const LLSD& key)
 
     // Load (double-)click to walk/teleport settings.
     updateClickActionViews();
+
+#if LL_LINUX
+    // Lixux doesn't support automatic maose warp mode
+    LLComboBox* combo = getChild<LLComboBox>("mouse_warp_combo");
+    S32 mode = gSavedSettings.getS32("MouseWarpMode");
+    if (mode == 0)
+    {
+        combo->setValue("1");
+    }
+    combo->setEnabledByValue("0", false);
+#endif
 
     // Enabled/disabled popups, might have been changed by user actions
     // while preferences floater was closed.
@@ -1092,6 +1116,13 @@ void LLFloaterPreference::onLanguageChange()
     }
 }
 
+void LLFloaterPreference::onTimeFormatChange()
+{
+    std::string val = mTimeFormatCombobox->getValue();
+    gSavedSettings.setBOOL("Use24HourClock", val == "1");
+    onLanguageChange();
+}
+
 void LLFloaterPreference::onNotificationsChange(const std::string& OptionName)
 {
     mNotificationOptions[OptionName] = getChild<LLComboBox>(OptionName)->getSelectedItemLabel();
@@ -1307,6 +1338,14 @@ void LLFloaterPreference::refresh()
         advanced->refresh();
     }
     updateClickActionViews();
+
+    mTimeFormatCombobox->selectByValue(gSavedSettings.getBOOL("Use24HourClock") ? "1" : "0");
+
+    std::string current_language = gSavedSettings.getString("Language");
+    if (current_language != "default" && !current_language.empty())
+    {
+        mLanguageCombobox->selectByValue(LLSD(current_language));
+    }
 }
 
 void LLFloaterPreference::onCommitWindowedMode()
@@ -1317,7 +1356,35 @@ void LLFloaterPreference::onCommitWindowedMode()
 void LLFloaterPreference::onChangeQuality(const LLSD& data)
 {
     U32 level = (U32)(data.asReal());
+    constexpr U32 LVL_HIGH = 4;
+    if (level >= LVL_HIGH && mLastQualityLevel < level)
+    {
+        constexpr U32 LOW_MEM_THRESHOLD = 4097;
+        U32 total_mem = U32Megabytes(LLMemory::getMaxMemKB());
+        if (total_mem < LOW_MEM_THRESHOLD)
+        {
+            LLSD args;
+            args["TOTAL_MEM"] = LLSD::Integer(total_mem);
+            LLNotificationsUtil::add("PreferenceQualityWithLowMemory", args, LLSD(), [this](const LLSD& notification, const LLSD& response)
+            {
+                S32 option = LLNotificationsUtil::getSelectedOption(notification, response);
+                // If cancel pressed
+                if (option == 1)
+                {
+                    constexpr U32 LVL_MED_PLUS = 3;
+                    gSavedSettings.setU32("RenderQualityPerformance", LVL_MED_PLUS);
+                    mLastQualityLevel = LVL_MED_PLUS;
+                    LLFeatureManager::getInstance()->setGraphicsLevel(LVL_MED_PLUS, true);
+                    refreshEnabledGraphics();
+                    refresh();
+                }
+            }
+            );
+        }
+    }
+    mLastQualityLevel = level;
     LLFeatureManager::getInstance()->setGraphicsLevel(level, true);
+    gSavedSettings.setU32("DebugQualityPerformance", level);
     refreshEnabledGraphics();
     refresh();
 }
@@ -1439,7 +1506,7 @@ bool LLFloaterPreference::moveTranscriptsAndLog()
         //Couldn't move the log and created a new directory so remove the new directory
         if(madeDirectory)
         {
-            LLFile::rmdir(chatLogPath);
+            LLFile::remove(chatLogPath);
         }
         return false;
     }
@@ -1465,7 +1532,7 @@ bool LLFloaterPreference::moveTranscriptsAndLog()
 
         if(madeDirectory)
         {
-            LLFile::rmdir(chatLogPath);
+            LLFile::remove(chatLogPath);
         }
 
         return false;
@@ -1674,6 +1741,22 @@ void LLFloaterPreference::onChangeMaturity()
                                                             || sim_access == SIM_ACCESS_ADULT);
 
     getChild<LLIconCtrl>("rating_icon_adult")->setVisible(sim_access == SIM_ACCESS_ADULT);
+
+    // Update Legacy Search maturity settings
+    bool can_access_mature = gAgent.canAccessMature();
+    bool can_access_adult  = gAgent.canAccessAdult();
+    if (!can_access_mature)
+    {
+        gSavedSettings.setBOOL("ShowMatureSims", false);
+        gSavedSettings.setBOOL("ShowMatureLand", false);
+        gSavedSettings.setBOOL("ShowMatureClassifieds", false);
+    }
+    if (!can_access_adult)
+    {
+        gSavedSettings.setBOOL("ShowAdultSims", false);
+        gSavedSettings.setBOOL("ShowAdultLand", false);
+        gSavedSettings.setBOOL("ShowAdultClassifieds", false);
+    }
 }
 
 void LLFloaterPreference::onChangeComplexityMode(const LLSD& newvalue)
@@ -1785,6 +1868,11 @@ void LLFloaterPreference::onClickAdvanced()
             panel->resetDirtyChilds();
         }
     }
+}
+
+void LLFloaterPreference::onClickScriptingPerfs()
+{
+    LLFloaterReg::showInstance("scripting_settings");
 }
 
 void LLFloaterPreference::onClickActionChange()
@@ -1968,7 +2056,23 @@ void LLFloaterPreference::selectChatPanel()
 
 void LLFloaterPreference::changed()
 {
-    getChild<LLButton>("clear_log")->setEnabled(LLConversationLog::instance().getConversations().size() > 0);
+    if (LLConversationLog::instance().getIsLoggingEnabled())
+    {
+        getChild<LLButton>("clear_log")->setEnabled(LLConversationLog::instance().getConversations().size() > 0);
+    }
+    else
+    {
+        // onClearLog clears list, then notifies changed() and only then clears file,
+        // so check presence of conversations before checking file, file will cleared later.
+        bool has_logs = false;
+        if (LLConversationLog::instance().getConversations().size() > 0)
+        {
+            std::filesystem::path file_path = fsyspath(LLConversationLog::instance().getFileName());
+            has_logs = LLFile::isfile(file_path)
+                        && LLFile::size(file_path) > 0;
+        }
+        getChild<LLButton>("clear_log")->setEnabled(has_logs);
+    }
 
     // set 'enable' property for 'Delete transcripts...' button
     updateDeleteTranscriptsButton();
@@ -1993,7 +2097,7 @@ class LLPanelPreference::Updater : public LLEventTimer
 
 public:
 
-    typedef boost::function<bool(const LLSD&)> callback_t;
+    typedef std::function<bool(const LLSD&)> callback_t;
 
     Updater(callback_t cb, F32 period)
     :LLEventTimer(period),
@@ -3436,7 +3540,7 @@ void LLFloaterPreference::collectSearchableItems()
     LLTabContainer *pRoot = getChild< LLTabContainer >( "pref core" );
     if( mFilterEdit && pRoot )
     {
-        mSearchData.reset(new ll::prefs::SearchData() );
+        mSearchData = std::make_unique<ll::prefs::SearchData>();
 
         ll::prefs::TabContainerDataPtr pRootTabcontainer = ll::prefs::TabContainerDataPtr( new ll::prefs::TabContainerData );
         pRootTabcontainer->mTabContainer = pRoot;

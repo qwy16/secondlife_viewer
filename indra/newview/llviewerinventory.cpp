@@ -4,7 +4,7 @@
  *
  * $LicenseInfo:firstyear=2002&license=viewerlgpl$
  * Second Life Viewer Source Code
- * Copyright (C) 2014, Linden Research, Inc.
+ * Copyright (C) 2026, Linden Research, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -71,6 +71,10 @@
 #include "llclipboard.h"
 #include "llhttpretrypolicy.h"
 #include "llsettingsvo.h"
+#include "llinventorylistener.h"
+#include "llviewerassetupload.h"
+
+LLInventoryListener sInventoryListener;
 
 // do-nothing ops for use in callbacks.
 void no_op_inventory_func(const LLUUID&) {}
@@ -416,7 +420,9 @@ void LLViewerInventoryItem::updateServer(bool is_new) const
                          << LL_ENDL;
         return;
     }
-    if(gAgent.getID() != mPermissions.getOwner())
+    LLUUID owner = mPermissions.getOwner();
+    if(gAgent.getID() != owner
+        && owner.notNull()) // incomplete?
     {
         // *FIX: deal with this better.
         LL_WARNS(LOG_INV) << "LLViewerInventoryItem::updateServer() - for unowned item "
@@ -486,7 +492,7 @@ void LLViewerInventoryItem::fetchFromServer(void) const
                 body["items"][0]["owner_id"] = mPermissions.getOwner();
                 body["items"][0]["item_id"] = mUUID;
 
-                LLCore::HttpHandler::ptr_t handler(new LLInventoryModel::FetchItemHttpHandler(body));
+                LLCore::HttpHandler::ptr_t handler = std::make_shared<LLInventoryModel::FetchItemHttpHandler>(body);
                 gInventory.requestPost(true, url, body, handler, "Inventory Item");
             }
         }
@@ -499,6 +505,16 @@ bool LLViewerInventoryItem::unpackMessage(const LLSD& item)
     bool rv = LLInventoryItem::fromLLSD(item);
 
     LLLocalizedInventoryItemsDictionary::getInstance()->localizeInventoryObjectName(mName);
+
+    // Parse script runtime state from task inventory cap
+    if (item.has("running"))
+    {
+        mIsRunning = item["running"].asBoolean();
+    }
+    if (item.has("faulted"))
+    {
+        mIsFaulted = item["faulted"].asBoolean();
+    }
 
     mIsComplete = true;
     return rv;
@@ -668,6 +684,25 @@ void LLViewerInventoryCategory::setVersion(S32 version)
     mVersion = version;
 }
 
+const std::string& LLViewerInventoryCategory::getDisplayName() const
+{
+    if (mNeedsDisplayNameUpdate)
+    {
+        buildDisplayName();
+    }
+    if (!mDisplayName.empty())
+    {
+        return mDisplayName;
+    }
+    return getName();
+}
+
+void LLViewerInventoryCategory::invalidateDisplayName()
+{
+    mNeedsDisplayNameUpdate = true;
+    mDisplayName.clear();
+}
+
 bool LLViewerInventoryCategory::fetch(S32 expiry_seconds)
 {
     if((VERSION_UNKNOWN == getVersion())
@@ -751,27 +786,30 @@ S32 LLViewerInventoryCategory::getViewerDescendentCount() const
     return descendents_actual;
 }
 
-LLSD LLViewerInventoryCategory::exportLLSD() const
+void LLViewerInventoryCategory::exportLLSD(LLSD & cat_data) const
 {
-    LLSD cat_data = LLInventoryCategory::exportLLSD();
+    LLInventoryCategory::exportLLSD(cat_data);
     cat_data[INV_OWNER_ID] = mOwnerID;
     cat_data[INV_VERSION] = mVersion;
-
-    return cat_data;
 }
 
-bool LLViewerInventoryCategory::importLLSD(const LLSD& cat_data)
+bool LLViewerInventoryCategory::importLLSD(const std::string& label, const LLSD& value)
 {
-    LLInventoryCategory::importLLSD(cat_data);
-    if (cat_data.has(INV_OWNER_ID))
+    if (LLInventoryCategory::importLLSD(label, value))
     {
-        mOwnerID = cat_data[INV_OWNER_ID].asUUID();
+        return true;
     }
-    if (cat_data.has(INV_VERSION))
+    else if (label == INV_OWNER_ID)
     {
-        setVersion(cat_data[INV_VERSION].asInteger());
+        mOwnerID = value.asUUID();
+        return true;
     }
-    return true;
+    else if (label == INV_VERSION)
+    {
+        setVersion(value.asInteger());
+        return true;
+    }
+    return false;
 }
 
 bool LLViewerInventoryCategory::acceptItem(LLInventoryItem* inv_item)
@@ -881,6 +919,34 @@ void LLViewerInventoryCategory::localizeName()
     LLLocalizedInventoryItemsDictionary::getInstance()->localizeInventoryObjectName(mName);
 }
 
+void LLViewerInventoryCategory::buildDisplayName() const
+{
+    // Secure and library folders can't be renamed,
+    // so we only need to do this once.
+    mNeedsDisplayNameUpdate = false;
+
+    //"Accessories" inventory category has folder type FT_NONE. So, this folder
+    //can not be detected as protected with LLFolderType::lookupIsProtectedType
+    //
+    // HACK: EXT - 6028 ([HARD CODED]? Inventory > Library > "Accessories" folder)
+    // Translation of Accessories folder in Library inventory folder
+    LLFolderType::EType preferred_type = getPreferredType();
+
+    bool is_accessories = false;
+    if (getName() == "Accessories")
+    {
+        // To ensure that Accessories folder is in Library we have to check its parent folder.
+        const LLUUID& parent_folder_id = getParentUUID();
+        is_accessories = (parent_folder_id == gInventory.getLibraryRootFolderID());
+    }
+
+    if (is_accessories || LLFolderType::lookupIsProtectedType(preferred_type))
+    {
+        // All predefined folders have translations in strings.xml.
+        LLTrans::findString(mDisplayName, std::string("InvFolder ") + getName(), LLSD());
+    }
+}
+
 // virtual
 bool LLViewerInventoryCategory::unpackMessage(const LLSD& category)
 {
@@ -966,7 +1032,7 @@ void LLInventoryCallbackManager::fire(U32 callback_id, const LLUUID& item_id)
     }
 }
 
-void rez_attachment_cb(const LLUUID& inv_item, LLViewerJointAttachment *attachmentp)
+void rez_attachment_cb(const LLUUID& inv_item, LLViewerJointAttachment *attachmentp, bool replace)
 {
     if (inv_item.isNull())
         return;
@@ -974,7 +1040,7 @@ void rez_attachment_cb(const LLUUID& inv_item, LLViewerJointAttachment *attachme
     LLViewerInventoryItem *item = gInventory.getItem(inv_item);
     if (item)
     {
-        rez_attachment(item, attachmentp);
+        rez_attachment(item, attachmentp, replace);
     }
 }
 
@@ -1436,7 +1502,8 @@ void update_inventory_category(
     if(obj)
     {
         if (LLFolderType::lookupIsProtectedType(obj->getPreferredType())
-            && (updates.size() != 1 || !updates.has("thumbnail")))
+            && (updates.size() != 1
+                || !(updates.has("thumbnail") || updates.has("favorite"))))
         {
             LLNotificationsUtil::add("CannotModifyProtectedCategories");
             return;
@@ -1703,9 +1770,10 @@ void create_new_item(const std::string& name,
                    LLAssetType::EType asset_type,
                    LLInventoryType::EType inv_type,
                    U32 next_owner_perm,
-                   std::function<void(const LLUUID&)> created_cb = NULL)
+                   std::function<void(const LLUUID&)> created_cb = nullptr)
 {
     std::string desc;
+    U8 subtype = NO_INV_SUBTYPE;
     LLViewerAssetType::generateDescriptionFor(asset_type, desc);
     next_owner_perm = (next_owner_perm) ? next_owner_perm : PERM_MOVE | PERM_TRANSFER;
 
@@ -1717,6 +1785,20 @@ void create_new_item(const std::string& name,
         {
             cb = new LLBoostFuncInventoryCallback(create_script_cb);
             next_owner_perm = LLFloaterPerms::getNextOwnerPerms("Scripts");
+
+            LLViewerRegion* region = gAgent.getRegion();
+            if (region && region->simulatorFeaturesReceived())
+            {
+                // *TODO* Setting the subtype for the script will cause the server to select
+                // either the LSL or Lua default script.  We should perhaps allow the user to
+                // select which type of script they want to create.
+                LLSD simulatorFeatures;
+                region->getSimulatorFeatures(simulatorFeatures);
+                if (simulatorFeatures["LuaScriptsEnabled"].asBoolean())
+                {
+                    subtype = SST_LUA;
+                }
+            }
             break;
         }
 
@@ -1759,7 +1841,7 @@ void create_new_item(const std::string& name,
                           desc,
                           asset_type,
                           inv_type,
-                          NO_INV_SUBTYPE,
+                          subtype,
                           next_owner_perm,
                           cb);
 }
@@ -1827,7 +1909,7 @@ void menu_create_inventory_item(LLInventoryPanel* panel, LLUUID dest_id, const L
             parent_id = gInventory.getRootFolderID();
         }
 
-        std::function<void(const LLUUID&)> callback_cat_created = NULL;
+        std::function<void(const LLUUID&)> callback_cat_created = nullptr;
         if (panel)
         {
             LLHandle<LLPanel> handle = panel->getHandle();

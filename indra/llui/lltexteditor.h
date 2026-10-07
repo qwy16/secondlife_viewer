@@ -144,8 +144,10 @@ public:
     virtual bool    canDoDelete() const;
     virtual void    selectAll();
     virtual bool    canSelectAll()  const;
+    virtual void    deselect();
 
     void            selectByCursorPosition(S32 prev_cursor_pos, S32 next_cursor_pos);
+    void            setSelectAllOnFocusReceived(bool b);
 
     virtual bool    canLoadOrSaveToFile();
 
@@ -162,7 +164,7 @@ public:
     bool            allowsEmbeddedItems() const { return mAllowEmbeddedItems; }
 
     // Autoreplace (formerly part of LLLineEditor)
-    typedef boost::function<void(S32&, S32&, LLWString&, S32&, const LLWString&)> autoreplace_callback_t;
+    typedef std::function<void(S32&, S32&, LLWString&, S32&, const LLWString&)> autoreplace_callback_t;
     autoreplace_callback_t mAutoreplaceCallback;
     void            setAutoreplaceCallback(autoreplace_callback_t cb) { mAutoreplaceCallback = cb; }
 
@@ -206,6 +208,7 @@ public:
 
     void            setShowContextMenu(bool show) { mShowContextMenu = show; }
     bool            getShowContextMenu() const { return mShowContextMenu; }
+    void            showContextMenu(S32 x, S32 y);
 
     void            showEmojiHelper();
     void            hideEmojiHelper();
@@ -217,7 +220,6 @@ public:
     LLWString       getConvertedText() const;
 
 protected:
-    void            showContextMenu(S32 x, S32 y);
     void            drawPreeditMarker();
 
     void            removeCharOrTab();
@@ -336,6 +338,8 @@ private:
     bool            mEnableTooltipPaste;
     bool            mPassDelete;
     bool            mKeepSelectionOnReturn; // disabling of removing selected text after pressing of Enter
+    bool            mSelectAllOnFocusReceived;
+    bool            mSelectedOnFocusReceived;
 
     LLUUID          mSourceID;
 

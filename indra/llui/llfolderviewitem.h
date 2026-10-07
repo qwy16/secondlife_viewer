@@ -4,7 +4,7 @@
 *
 * $LicenseInfo:firstyear=2001&license=viewerlgpl$
 * Second Life Viewer Source Code
-* Copyright (C) 2010, Linden Research, Inc.
+* Copyright (C) 2026, Linden Research, Inc.
 *
 * This library is free software; you can redistribute it and/or
 * modify it under the terms of the GNU Lesser General Public
@@ -50,7 +50,9 @@ class LLFolderViewItem : public LLView
 public:
     struct Params : public LLInitParam::Block<Params, LLView::Params>
     {
-        Optional<LLUIImage*>                        folder_arrow_image,
+        Optional<LLUIImage*>                        favorite_image,
+                                                    favorite_content_image,
+                                                    folder_arrow_image,
                                                     selection_image;
         Mandatory<LLFolderView*>                    root;
         Mandatory<LLFolderViewModelItem*>           listener;
@@ -60,7 +62,7 @@ public:
                                                     item_top_pad;
 
         Optional<time_t>                            creation_date;
-        Optional<bool>                              allow_wear;
+        Optional<bool>                              marketplace_item;
         Optional<bool>                              allow_drop;
 
         Optional<LLUIColor>                         font_color;
@@ -71,7 +73,9 @@ public:
                                                     icon_width,
                                                     text_pad,
                                                     text_pad_right,
+                                                    text_pad_top,
                                                     arrow_size,
+                                                    arrow_pad_top,
                                                     max_folder_item_overlap;
         Optional<bool>                              single_folder_mode,
                                                     double_click_override;
@@ -93,6 +97,8 @@ protected:
     LLWString                   mLabel;
     S32                         mLabelWidth;
     bool                        mLabelWidthDirty;
+    bool                        mIsFavorite;
+    bool                        mHasFavorites;
     S32                         mLabelPaddingRight;
     LLFolderViewFolder*         mParentFolder;
     LLPointer<LLFolderViewModelItem> mViewModelItem;
@@ -113,7 +119,9 @@ protected:
                                 mIconWidth,
                                 mTextPad,
                                 mTextPadRight,
+                                mTextPadTop,
                                 mArrowSize,
+                                mArrowPadTop,
                                 mMaxFolderItemOverlap;
 
     F32                         mControlLabelRotation;
@@ -122,7 +130,7 @@ protected:
                                 mIsCurSelection,
                                 mDragAndDropTarget,
                                 mIsMouseOverTitle,
-                                mAllowWear,
+                                mMarketplaceItem,
                                 mAllowDrop,
                                 mSingleFolderMode,
                                 mDoubleClickOverride,
@@ -133,6 +141,7 @@ protected:
 
     LLUIColor                   mFontColor;
     LLUIColor                   mFontHighlightColor;
+    static bool                 sColorSetInitialized;
 
     // For now assuming all colors are the same in derived classes.
     static LLUIColor            sFgColor;
@@ -145,6 +154,8 @@ protected:
     static LLUIColor            sFilterTextColor;
     static LLUIColor            sSuffixColor;
     static LLUIColor            sSearchStatusColor;
+    static LLUIColor            sFavoriteColor;
+
 
     // this is an internal method used for adding items to folders. A
     // no-op at this level, but reimplemented in derived classes.
@@ -208,6 +219,8 @@ public:
     // Returns true is this object and all of its children can be moved
     virtual bool isMovable();
 
+    bool isFavorite() const { return mIsFavorite; }
+
     // destroys this item recursively
     virtual void destroyView();
 
@@ -239,6 +252,11 @@ public:
     // This method returns the actual name of the thing being
     // viewed. This method will ask the viewed object itself.
     const std::string& getName( void ) const;
+
+    // Override to provide lazy tooltip generation without memory overhead
+    // Inventory can consist of millions of items, yet most stay invisible,
+    // much less need to show a tooltip, so avoid storing tooltips.
+    virtual const std::string getToolTip() const;
 
     // This method returns the label displayed on the view. This
     // method was primarily added to allow sorting on the folder
@@ -298,6 +316,7 @@ public:
     //  virtual void handleDropped();
     virtual void draw();
     void drawOpenFolderArrow();
+    void drawFavoriteIcon();
     void drawHighlight(bool showContent, bool hasKeyboardFocus, const LLUIColor& selectColor, const LLUIColor& flashColor, const LLUIColor& outlineColor, const LLUIColor& mouseOverColor);
     void drawLabel(const LLFontGL* font, const F32 x, const F32 y, const LLColor4& color, F32 &right_x);
     virtual bool handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
@@ -311,6 +330,8 @@ private:
     static S32 sTopPad;
     static LLUIImagePtr sFolderArrowImg;
     static LLUIImagePtr sSelectionImg;
+    static LLUIImagePtr sFavoriteImg;
+    static LLUIImagePtr sFavoriteContentImg;
     static LLFontGL* sSuffixFont;
 
     LLFontVertexBuffer mLabelFontBuffer;
@@ -399,6 +420,19 @@ public:
 
     // Returns true is this object and all of its children can be moved
     virtual bool isMovable();
+
+    bool isFavorite() const { return mIsFavorite; }
+    bool hasFavorites() const { return mHasFavorites; }
+    void setHasFavorites(bool val) { mHasFavorites = val; }
+    void updateHasFavorites(bool new_childs_value);
+private:
+    static void onIdleUpdateFavorites(void* data);
+
+    constexpr static S32 FAVORITE_ADDED = 1;
+    constexpr static S32 FAVORITE_REMOVED = 2;
+    constexpr static S32 FAVORITE_CLEANUP = 4;
+    S32 mFavoritesDirtyFlags { 0 };
+public:
 
     // destroys this folder, and all children
     virtual void destroyView();

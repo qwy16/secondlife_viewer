@@ -75,7 +75,7 @@ class LLToast : public LLModalDialog, public LLInstanceTracker<LLToast>
     friend class LLToastLifeTimer;
 public:
 
-    typedef boost::function<void (LLToast* toast)> toast_callback_t;
+    typedef std::function<void (LLToast* toast)> toast_callback_t;
     typedef boost::signals2::signal<void (LLToast* toast)> toast_signal_t;
     typedef boost::signals2::signal<void (LLToast* toast, bool mouse_enter)> toast_hover_check_signal_t;
 
@@ -213,6 +213,9 @@ private:
     void expire();
 
     void setFading(bool fading);
+
+    // Use a unique root name for LEAP toast lookups.
+    void updateUniqueName();
 
     LLUUID              mNotificationID;
     LLUUID              mSessionID;

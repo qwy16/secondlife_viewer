@@ -63,8 +63,9 @@
 
 #include "tinygltf/tiny_gltf.h"
 #include "lltinygltfhelper.h"
-#include <strstream>
 
+#include <boost/iostreams/device/array.hpp>
+#include <boost/iostreams/stream.hpp>
 
 const std::string MATERIAL_BASE_COLOR_DEFAULT_NAME = "Base Color";
 const std::string MATERIAL_NORMAL_DEFAULT_NAME = "Normal";
@@ -137,7 +138,8 @@ LLFloaterComboOptions* LLFloaterComboOptions::showUI(
         {
             combo_picker->mComboOptions->addSimpleElement(*iter);
         }
-        combo_picker->mComboOptions->selectFirstItem();
+        // select 'Bulk Upload All' option
+        combo_picker->mComboOptions->selectNthItem((S32)options.size() - 1);
 
         combo_picker->openFloater(LLSD(title));
         combo_picker->setFocus(true);
@@ -175,6 +177,116 @@ void LLFloaterComboOptions::onCancel()
     closeFloater();
 }
 
+class LLMaterialEditorTaskMoveObserver : public LLInventoryAddItemByAssetObserver
+{
+public:
+    LLMaterialEditorTaskMoveObserver(
+        const LLUUID& asset_id,
+        const LLUUID& dest_folder_id,
+        const std::string& item_name,
+        LLPointer<LLInventoryCallback> cb)
+        : mDestFolderID(dest_folder_id),
+        mItemName(item_name),
+        mWatchByName(asset_id.isNull()),
+        mCallback(cb)
+    {
+        if (mWatchByName)
+        {
+            // Default materials have a null asset id, so they can't
+            // be tracked via LLInventoryAddItemByAssetObserver. Fall back to
+            // watching the destination folder for a new item with a matching
+            // name instead.
+            gInventory.addObserver(this);
+        }
+        else
+        {
+            watchAsset(asset_id);
+        }
+    }
+
+    virtual ~LLMaterialEditorTaskMoveObserver()
+    {
+        gInventory.removeObserver(this);
+    }
+
+    virtual void changed(U32 mask) override
+    {
+        if (mWatchByName)
+        {
+            if (!(mask & LLInventoryObserver::ADD) ||
+                !(mask & LLInventoryObserver::CREATE) ||
+                !(mask & LLInventoryObserver::UPDATE_CREATE))
+            {
+                return;
+            }
+
+            const uuid_set_t& added = gInventory.getAddedIDs();
+            for (uuid_set_t::const_iterator it = added.begin(); it != added.end(); ++it)
+            {
+                LLViewerInventoryItem* item = gInventory.getItem(*it);
+                // A lot of things can have a null assey UUID, so needs extra safeties.
+                if (item
+                    && item->getParentUUID() == mDestFolderID
+                    && item->getName() == mItemName
+                    && item->getType() == LLAssetType::AT_MATERIAL
+                    && item->getAssetUUID().isNull())
+                {
+                    gInventory.removeObserver(this);
+
+                    // Fire the callback
+                    if (mCallback)
+                    {
+                        mCallback->fire(item->getUUID());
+                    }
+
+                    delete this;
+                    return;
+                }
+            }
+            return;
+        }
+
+        // Call base class to populate mAddedItems
+        LLInventoryAddItemByAssetObserver::changed(mask);
+
+        // If base class completed (which calls done() and clears mAddedItems),
+        // and we set mIsDirty, that means we're finished
+        if (mIsDirty)
+        {
+            gInventory.removeObserver(this);
+            delete this;
+        }
+    }
+
+protected:
+    virtual void done() override
+    {
+        // Find the moved item
+        // There must be only one since we are watching only one item,
+        // changed wouldn't fire otherwise. But just in case.
+        if (mAddedItems.size() == 1)
+        {
+            LLUUID item_id = mAddedItems[0];
+
+            // Fire the callback
+            if (mCallback)
+            {
+                mCallback->fire(item_id);
+            }
+        }
+
+        // Todo: gInventoryMoveObserver normally opens inventory
+        // on completion, should this do the same?
+    }
+
+private:
+    LLUUID mDestFolderID;
+    std::string mItemName;
+    std::string mNewName;
+    bool mWatchByName;
+    LLPointer<LLInventoryCallback> mCallback;
+};
+
 class LLMaterialEditorCopiedCallback : public LLInventoryCallback
 {
 public:
@@ -188,6 +300,18 @@ public:
     {}
 
     LLMaterialEditorCopiedCallback(
+        const std::string & buffer,
+        const LLSD & old_key,
+        const std::string & new_name,
+        bool has_unsaved_changes)
+        : mBuffer(buffer),
+        mOldKey(old_key),
+        mNewName(new_name),
+        mHasUnsavedChanges(has_unsaved_changes)
+    {
+    }
+
+    LLMaterialEditorCopiedCallback(
         const LLSD &old_key,
         const std::string &new_name)
         : mOldKey(old_key),
@@ -199,7 +323,10 @@ public:
     {
         if (!mNewName.empty())
         {
-            // making a copy from a notecard doesn't change name, do it now
+            // making a copy from a task inventory (object, notecard)
+            // doesn't change name, do it now
+            // Todo: Can calling update_inventory_item and finishSaveAs
+            // cause a race condition?
             LLViewerInventoryItem* item = gInventory.getItem(inv_item_id);
             if (item->getName() != mNewName)
             {
@@ -492,7 +619,7 @@ bool LLMaterialEditor::postBuild()
         refreshUploadCost();
     }
 
-    boost::function<void(LLUICtrl*, void*)> changes_callback = [this](LLUICtrl * ctrl, void* userData)
+    std::function<void(LLUICtrl*, void*)> changes_callback = [this](LLUICtrl * ctrl, void* userData)
     {
         const U32 *flag = (const U32*)userData;
         markChangesUnsaved(*flag);
@@ -1245,7 +1372,7 @@ bool LLMaterialEditor::decodeAsset(const std::vector<char>& buffer)
 {
     LLSD asset;
 
-    std::istrstream str(&buffer[0], buffer.size());
+    boost::iostreams::stream<boost::iostreams::array_source> str(buffer.data(), buffer.size());
     if (LLSDSerialize::deserialize(asset, str, buffer.size()))
     {
         if (asset.has("version") && LLGLTFMaterial::isAcceptedVersion(asset["version"].asString()))
@@ -1332,21 +1459,21 @@ const std::string LLMaterialEditor::buildMaterialDescription()
         desc << mNormalName;
     }
 
-    // trim last char if it's a ',' in case there is no normal texture
-    // present and the code above inserts one
-    // (no need to check for string length - always has initial string)
-    std::string::iterator iter = desc.str().end() - 1;
-    if (*iter == ',')
-    {
-        desc.str().erase(iter);
-    }
-
     // sanitize the material description so that it's compatible with the inventory
     // note: split this up because clang doesn't like operating directly on the
     // str() - error: lvalue reference to type 'basic_string<...>' cannot bind to a
     // temporary of type 'basic_string<...>'
     std::string inv_desc = desc.str();
     LLInventoryObject::correctInventoryName(inv_desc);
+
+    // trim last char if it's a ',' in case there is no normal texture
+    // present and the code above inserts one
+    // (no need to check for string length - always has initial string)
+    std::string::iterator iter = inv_desc.end() - 1;
+    if (*iter == ',')
+    {
+        inv_desc.erase(iter);
+    }
 
     return inv_desc;
 }
@@ -1414,7 +1541,7 @@ bool LLMaterialEditor::saveIfNeeded()
         }
 
         std::string res_desc = buildMaterialDescription();
-        createInventoryItem(buffer, mMaterialName, res_desc, local_permissions);
+        createInventoryItem(buffer, mMaterialName, res_desc, local_permissions, mUploadFolder);
 
         // We do not update floater with uploaded asset yet, so just close it.
         closeFloater();
@@ -1584,12 +1711,12 @@ private:
     std::string mNewName;
 };
 
-void LLMaterialEditor::createInventoryItem(const std::string &buffer, const std::string &name, const std::string &desc, const LLPermissions& permissions)
+void LLMaterialEditor::createInventoryItem(const std::string &buffer, const std::string &name, const std::string &desc, const LLPermissions& permissions, const LLUUID& upload_folder)
 {
     // gen a new uuid for this asset
     LLTransactionID tid;
     tid.generate();     // timestamp-based randomization + uniquification
-    LLUUID parent = gInventory.findUserDefinedCategoryUUIDForType(LLFolderType::FT_MATERIAL);
+    LLUUID parent = upload_folder.isNull() ? gInventory.findUserDefinedCategoryUUIDForType(LLFolderType::FT_MATERIAL) : upload_folder;
     const U8 subtype = NO_INV_SUBTYPE;  // TODO maybe use AT_SETTINGS and LLSettingsType::ST_MATERIAL ?
 
     LLPointer<LLObjectsMaterialItemCallback> cb = new LLObjectsMaterialItemCallback(permissions, buffer, name);
@@ -1809,6 +1936,53 @@ void LLMaterialEditor::onSaveAsMsgCallback(const LLSD& notification, const LLSD&
                         mNotecardInventoryID,
                         mAuxItem.get(),
                         gInventoryCallbacks.registerCB(cb));
+
+                    mAssetStatus = PREVIEW_ASSET_LOADING;
+                    setEnabled(false);
+                }
+                else if (mObjectUUID.notNull())
+                {
+                    // Item is in task (object) inventory - must move to agent
+                    // inventory first.
+                    // Note: If this is too flimsy, just disable the 'save as'
+                    // button when in object inventory and create a server ticket,
+                    // as we need a copy with callback variant.
+                    LLViewerObject* object = gObjectList.findObject(mObjectUUID);
+                    if (object)
+                    {
+                        LLPermissions perm(item->getPermissions());
+                        if (perm.allowCopyBy(gAgent.getID(), gAgent.getGroupID())
+                            && perm.allowTransferTo(gAgent.getID()))
+                        {
+                            // Create a callback for after the item is copied/moved
+                            std::string buffer = getEncodedAsset();
+                            LLPointer<LLInventoryCallback> cb = new LLMaterialEditorCopiedCallback(
+                                buffer,
+                                getKey(),
+                                new_name,
+                                mUnsavedChanges);
+
+                            // Create observer to watch for the item arriving in inventory
+                            // The observer will fire our callback when the move completes
+                            LLMaterialEditorTaskMoveObserver* observer = new LLMaterialEditorTaskMoveObserver(
+                                item->getAssetUUID(),
+                                parent_id,
+                                item->getName(),
+                                cb
+                            );
+                            gInventory.addObserver(observer);
+
+                            // Copies(not moves) item from object to agent inventory
+                            object->moveInventory(parent_id, item->getUUID());
+
+                            mAssetStatus = PREVIEW_ASSET_LOADING;
+                            setEnabled(false);
+                        }
+                        else
+                        {
+                            LL_WARNS("MaterialEditor") << "Insufficient permissions to copy material from object inventory" << LL_ENDL;
+                        }
+                    }
                 }
                 else
                 {
@@ -1821,10 +1995,10 @@ void LLMaterialEditor::onSaveAsMsgCallback(const LLSD& notification, const LLSD&
                         parent_id,
                         new_name,
                         cb);
-                }
 
-                mAssetStatus = PREVIEW_ASSET_LOADING;
-                setEnabled(false);
+                    mAssetStatus = PREVIEW_ASSET_LOADING;
+                    setEnabled(false);
+                }
             }
             else
             {
@@ -1903,7 +2077,12 @@ static void pack_textures(
     }
 }
 
-void LLMaterialEditor::uploadMaterialFromModel(const std::string& filename, tinygltf::Model& model_in, S32 index)
+void LLMaterialEditor::uploadMaterialFromModel(
+    const std::string& filename,
+    tinygltf::Model& model_in,
+    S32 index,
+    const LLUUID& dest,
+    const LLUUID& texture_dest)
 {
     if (index < 0 || !LLMaterialEditor::capabilitiesAvailable())
     {
@@ -1926,12 +2105,14 @@ void LLMaterialEditor::uploadMaterialFromModel(const std::string& filename, tiny
     // This uses 'filename' to make sure multiple bulk uploads work
     // instead of fighting for a single instance.
     LLMaterialEditor* me = (LLMaterialEditor*)LLFloaterReg::getInstance("material_editor", LLSD().with("filename", filename).with("index", LLSD::Integer(index)));
+    if (!me) return;
+    me->mUploadFolder = dest;
+    me->mTextureUploadFolder = texture_dest;
     me->loadMaterial(model_in, filename, index, false);
     me->saveIfNeeded();
 }
 
-
-void LLMaterialEditor::loadMaterialFromFile(const std::string& filename, S32 index)
+void LLMaterialEditor::loadMaterialFromFile(const std::string& filename, S32 index, const LLUUID& dest_folder)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_UI;
 
@@ -1980,12 +2161,14 @@ void LLMaterialEditor::loadMaterialFromFile(const std::string& filename, S32 ind
     {
         // Prespecified material
         LLMaterialEditor* me = (LLMaterialEditor*)LLFloaterReg::getInstance("material_editor");
+        me->mUploadFolder = dest_folder;
         me->loadMaterial(model_in, filename, index);
     }
     else if (model_in.materials.size() == 1)
     {
         // Only one material, just load it
         LLMaterialEditor* me = (LLMaterialEditor*)LLFloaterReg::getInstance("material_editor");
+        me->mUploadFolder = dest_folder;
         me->loadMaterial(model_in, filename, 0);
     }
     else
@@ -2011,11 +2194,12 @@ void LLMaterialEditor::loadMaterialFromFile(const std::string& filename, S32 ind
         material_list.push_back(LLTrans::getString("material_batch_import_text"));
 
         LLFloaterComboOptions::showUI(
-            [model_in, filename](const std::string& option, S32 index)
+            [model_in, filename, dest_folder](const std::string& option, S32 index)
         {
             if (index >= 0) // -1 on cancel
             {
                 LLMaterialEditor* me = (LLMaterialEditor*)LLFloaterReg::getInstance("material_editor");
+                me->mUploadFolder = dest_folder;
                 me->loadMaterial(model_in, filename, index);
             }
         },
@@ -2431,17 +2615,17 @@ void LLMaterialEditor::onSaveObjectsMaterialAsMsgCallback(const LLSD& notificati
         return;
     }
 
-    createInventoryItem(str.str(), new_name, std::string(), permissions);
+    createInventoryItem(str.str(), new_name, std::string(), permissions, LLUUID::null);
 }
 
-const void upload_bulk(const std::vector<std::string>& filenames, LLFilePicker::ELoadFilter type, bool allow_2k);
+void upload_bulk(const std::vector<std::string>& filenames, LLFilePicker::ELoadFilter type, bool allow_2k, const LLUUID& dest);
 
 void LLMaterialEditor::loadMaterial(const tinygltf::Model &model_in, const std::string &filename, S32 index, bool open_floater)
 {
     if (index == model_in.materials.size())
     {
         // bulk upload all the things
-        upload_bulk({ filename }, LLFilePicker::FFLOAD_MATERIAL, true);
+        upload_bulk({ filename }, LLFilePicker::FFLOAD_MATERIAL, true, mUploadFolder);
         return;
     }
 
@@ -2477,6 +2661,42 @@ void LLMaterialEditor::loadMaterial(const tinygltf::Model &model_in, const std::
         mBaseColorFetched, mNormalFetched, mMetallicRoughnessFetched, mEmissiveFetched);
     pack_textures(base_color_img, normal_img, mr_img, emissive_img, occlusion_img,
         mBaseColorJ2C, mNormalJ2C, mMetallicRoughnessJ2C, mEmissiveJ2C);
+
+    if (open_floater)
+    {
+        bool textures_scaled = false;
+        if (mBaseColorFetched && mBaseColorJ2C
+            && (mBaseColorFetched->getWidth() != mBaseColorJ2C->getWidth()
+                || mBaseColorFetched->getHeight() != mBaseColorJ2C->getHeight()))
+        {
+            textures_scaled = true;
+        }
+        else if (mNormalFetched && mNormalJ2C
+            && (mNormalFetched->getWidth() != mNormalJ2C->getWidth()
+                || mNormalFetched->getHeight() != mNormalJ2C->getHeight()))
+        {
+            textures_scaled = true;
+        }
+        else if (mMetallicRoughnessFetched && mMetallicRoughnessJ2C
+            && (mMetallicRoughnessFetched->getWidth() != mMetallicRoughnessJ2C->getWidth()
+                || mMetallicRoughnessFetched->getHeight() != mMetallicRoughnessJ2C->getHeight()))
+        {
+            textures_scaled = true;
+        }
+        else if (mEmissiveFetched && mEmissiveJ2C
+            && (mEmissiveFetched->getWidth() != mEmissiveJ2C->getWidth()
+                || mEmissiveFetched->getHeight() != mEmissiveJ2C->getHeight()))
+        {
+            textures_scaled = true;
+        }
+
+        if (textures_scaled)
+        {
+            LLSD args;
+            args["MAX_SIZE"] = LLViewerTexture::MAX_IMAGE_SIZE_DEFAULT;
+            LLNotificationsUtil::add("MaterialImagesWereScaled", args);
+        }
+    }
 
     LLUUID base_color_id;
     if (mBaseColorFetched.notNull())
@@ -2684,10 +2904,8 @@ const std::string LLMaterialEditor::getImageNameFromUri(std::string image_uri, c
         // so we can include everything
         if (stripped_uri.length() > 0)
         {
-            // example "DamagedHelmet: base layer"
+            // example "base layer"
             return STRINGIZE(
-                mMaterialNameShort <<
-                ": " <<
                 stripped_uri <<
                 " (" <<
                 texture_type <<
@@ -2696,28 +2914,17 @@ const std::string LLMaterialEditor::getImageNameFromUri(std::string image_uri, c
         }
         else
         // uri doesn't include the type (because the uri is empty)
-        // so we must reorganize the string a bit to include the name
-        // and an explicit name type
+        // include an explicit name type
         {
-            // example "DamagedHelmet: (Emissive)"
-            return STRINGIZE(
-                mMaterialNameShort <<
-                " (" <<
-                texture_type <<
-                ")"
-            );
+            // example "Emissive"
+            return texture_type;
         }
     }
     else
-    // uri includes the type so just use it directly with the
-    // name of the material
+    // uri includes the type so just use it directly
     {
-        return STRINGIZE(
-            // example: AlienBust: normal_layer
-            mMaterialNameShort <<
-            ": " <<
-            stripped_uri
-        );
+        // example: "normal_layer"
+        return stripped_uri;
     }
 }
 
@@ -2848,10 +3055,10 @@ void LLMaterialEditor::setFromGltfMetaData(const std::string& filename, const ti
     }
 }
 
-void LLMaterialEditor::importMaterial()
+void LLMaterialEditor::importMaterial(const LLUUID dest_folder)
 {
     LLFilePickerReplyThread::startPicker(
-        [](const std::vector<std::string>& filenames, LLFilePicker::ELoadFilter load_filter, LLFilePicker::ESaveFilter save_filter)
+        [dest_folder](const std::vector<std::string>& filenames, LLFilePicker::ELoadFilter load_filter, LLFilePicker::ESaveFilter save_filter)
             {
                 if (LLAppViewer::instance()->quitRequested())
                 {
@@ -2861,7 +3068,7 @@ void LLMaterialEditor::importMaterial()
                 {
                     if (filenames.size() > 0)
                     {
-                        LLMaterialEditor::loadMaterialFromFile(filenames[0], -1);
+                        LLMaterialEditor::loadMaterialFromFile(filenames[0], -1, dest_folder);
                     }
                 }
                 catch (std::bad_alloc&)
@@ -3549,6 +3756,7 @@ void LLMaterialEditor::saveTexture(LLImageJ2C* img, const std::string& name, con
         LLFloaterPerms::getGroupPerms("Uploads"),
         LLFloaterPerms::getEveryonePerms("Uploads"),
         expected_upload_cost,
+        mTextureUploadFolder.notNull() ? mTextureUploadFolder : mUploadFolder,
         false,
         cb,
         failed_upload));

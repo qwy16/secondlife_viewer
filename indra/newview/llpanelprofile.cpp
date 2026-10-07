@@ -106,84 +106,138 @@ LLUUID post_profile_image(std::string cap_url, const LLSD &first_data, std::stri
 {
     LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
     LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t
-        httpAdapter(new LLCoreHttpUtil::HttpCoroutineAdapter("post_profile_image_coro", httpPolicy));
-    LLCore::HttpRequest::ptr_t httpRequest(new LLCore::HttpRequest);
+        httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>("post_profile_image_coro", httpPolicy);
+    LLCore::HttpRequest::ptr_t httpRequest = std::make_shared<LLCore::HttpRequest>();
     LLCore::HttpHeaders::ptr_t httpHeaders;
 
-    LLCore::HttpOptions::ptr_t httpOpts(new LLCore::HttpOptions);
+    LLCore::HttpOptions::ptr_t httpOpts = std::make_shared<LLCore::HttpOptions>();
     httpOpts->setFollowRedirects(true);
 
-    LLSD result = httpAdapter->postAndSuspend(httpRequest, cap_url, first_data, httpOpts, httpHeaders);
+    // Retry stage-2 upload by re-requesting a fresh one-time uploader capability (up to 3 attempts total)
+    const S32 MAX_UPLOAD_RETRIES = 2;
+    S32 upload_retry_count = 0;
+    LLUUID result_uuid;
 
-    LLSD httpResults = result[LLCoreHttpUtil::HttpCoroutineAdapter::HTTP_RESULTS];
-    LLCore::HttpStatus status = LLCoreHttpUtil::HttpCoroutineAdapter::getStatusFromLLSD(httpResults);
+    while (upload_retry_count <= MAX_UPLOAD_RETRIES)
+    {
+        // Stage 1: Request uploader URL
+        LLSD result = httpAdapter->postAndSuspend(httpRequest, cap_url, first_data, httpOpts, httpHeaders);
 
-    if (!status)
-    {
-        // todo: notification?
-        LL_WARNS("AvatarProperties") << "Failed to get uploader cap " << status.toString() << LL_ENDL;
-        return LLUUID::null;
-    }
-    if (!result.has("uploader"))
-    {
-        // todo: notification?
-        LL_WARNS("AvatarProperties") << "Failed to get uploader cap, response contains no data." << LL_ENDL;
-        return LLUUID::null;
-    }
-    std::string uploader_cap = result["uploader"].asString();
-    if (uploader_cap.empty())
-    {
-        LL_WARNS("AvatarProperties") << "Failed to get uploader cap, cap invalid." << LL_ENDL;
-        return LLUUID::null;
-    }
+        LLSD httpResults = result[LLCoreHttpUtil::HttpCoroutineAdapter::HTTP_RESULTS];
+        LLCore::HttpStatus status = LLCoreHttpUtil::HttpCoroutineAdapter::getStatusFromLLSD(httpResults);
 
-    // Upload the image
-    LLCore::HttpRequest::ptr_t uploaderhttpRequest(new LLCore::HttpRequest);
-    LLCore::HttpHeaders::ptr_t uploaderhttpHeaders(new LLCore::HttpHeaders);
-    LLCore::HttpOptions::ptr_t uploaderhttpOpts(new LLCore::HttpOptions);
-    S64 length;
-
-    {
-        llifstream instream(path_to_image.c_str(), std::iostream::binary | std::iostream::ate);
-        if (!instream.is_open())
+        if (!status)
         {
-            LL_WARNS("AvatarProperties") << "Failed to open file " << path_to_image << LL_ENDL;
+            // todo: notification?
+            LL_WARNS("AvatarProperties") << "Failed to get uploader cap " << status.toString() << LL_ENDL;
             return LLUUID::null;
         }
-        length = instream.tellg();
-    }
 
-    uploaderhttpHeaders->append(HTTP_OUT_HEADER_CONTENT_TYPE, "application/jp2"); // optional
-    uploaderhttpHeaders->append(HTTP_OUT_HEADER_CONTENT_LENGTH, llformat("%d", length)); // required!
-    uploaderhttpOpts->setFollowRedirects(true);
-
-    result = httpAdapter->postFileAndSuspend(uploaderhttpRequest, uploader_cap, path_to_image, uploaderhttpOpts, uploaderhttpHeaders);
-
-    httpResults = result[LLCoreHttpUtil::HttpCoroutineAdapter::HTTP_RESULTS];
-    status = LLCoreHttpUtil::HttpCoroutineAdapter::getStatusFromLLSD(httpResults);
-
-    LL_DEBUGS("AvatarProperties") << result << LL_ENDL;
-
-    if (!status)
-    {
-        LL_WARNS("AvatarProperties") << "Failed to upload image " << status.toString() << LL_ENDL;
-        return LLUUID::null;
-    }
-
-    if (result["state"].asString() != "complete")
-    {
-        if (result.has("message"))
+        if (!result.has("uploader"))
         {
-            LL_WARNS("AvatarProperties") << "Failed to upload image, state " << result["state"] << " message: " << result["message"] << LL_ENDL;
+            // todo: notification?
+            LL_WARNS("AvatarProperties") << "Failed to get uploader cap, response contains no data." << LL_ENDL;
+            return LLUUID::null;
         }
-        else
+
+        std::string uploader_cap = result["uploader"].asString();
+        if (uploader_cap.empty())
         {
-            LL_WARNS("AvatarProperties") << "Failed to upload image " << result << LL_ENDL;
+            LL_WARNS("AvatarProperties") << "Failed to get uploader cap, cap invalid." << LL_ENDL;
+            return LLUUID::null;
         }
-        return LLUUID::null;
+
+        // Stage 2: Upload the image
+        LLCore::HttpRequest::ptr_t uploaderhttpRequest = std::make_shared<LLCore::HttpRequest>();
+        LLCore::HttpHeaders::ptr_t uploaderhttpHeaders = std::make_shared<LLCore::HttpHeaders>();
+        LLCore::HttpOptions::ptr_t uploaderhttpOpts = std::make_shared<LLCore::HttpOptions>();
+        S64 length;
+
+        {
+            llifstream instream(path_to_image.c_str(), std::iostream::binary | std::iostream::ate);
+            if (!instream.is_open())
+            {
+                LL_WARNS("AvatarProperties") << "Failed to open file " << path_to_image << LL_ENDL;
+                return LLUUID::null;
+            }
+            length = instream.tellg();
+        }
+
+        uploaderhttpHeaders->append(HTTP_OUT_HEADER_CONTENT_TYPE, "application/jp2");
+        uploaderhttpHeaders->append(HTTP_OUT_HEADER_CONTENT_LENGTH, std::to_string(length));
+        uploaderhttpOpts->setFollowRedirects(true);
+
+        result = httpAdapter->postFileAndSuspend(uploaderhttpRequest, uploader_cap, path_to_image, uploaderhttpOpts, uploaderhttpHeaders);
+
+        httpResults = result[LLCoreHttpUtil::HttpCoroutineAdapter::HTTP_RESULTS];
+        status = LLCoreHttpUtil::HttpCoroutineAdapter::getStatusFromLLSD(httpResults);
+
+        LL_DEBUGS("AvatarProperties") << result << LL_ENDL;
+
+        if (!status)
+        {
+            if (upload_retry_count < MAX_UPLOAD_RETRIES)
+            {
+                upload_retry_count++;
+                LL_WARNS("AvatarProperties") << "Failed to upload image (attempt " << upload_retry_count
+                                             << " of " << (MAX_UPLOAD_RETRIES + 1) << "): " << status.toString()
+                                             << ", re-requesting uploader..." << LL_ENDL;
+                llcoro::suspendUntilTimeout(1.0f);
+                continue;
+            }
+            else
+            {
+                LL_WARNS("AvatarProperties") << "Failed to upload image after " << (MAX_UPLOAD_RETRIES + 1)
+                                            << " attempts: " << status.toString() << LL_ENDL;
+                return LLUUID::null;
+            }
+        }
+
+        // Todo: should we really repeat if 'complete' not set?
+        if (result["state"].asString() != "complete")
+        {
+            if (upload_retry_count < MAX_UPLOAD_RETRIES)
+            {
+                upload_retry_count++;
+                if (result.has("message"))
+                {
+                    LL_WARNS("AvatarProperties") << "Failed to upload image, state " << result["state"]
+                                                 << " message: " << result["message"] << " (attempt "
+                                                 << upload_retry_count << " of " << (MAX_UPLOAD_RETRIES + 1)
+                                                 << "), re-requesting uploader..." << LL_ENDL;
+                }
+                else
+                {
+                    LL_WARNS("AvatarProperties") << "Failed to upload image (attempt " << upload_retry_count
+                                                 << " of " << (MAX_UPLOAD_RETRIES + 1)
+                                                 << "), re-requesting uploader..." << LL_ENDL;
+                }
+                llcoro::suspendUntilTimeout(1.0f);
+                continue;
+            }
+            else
+            {
+                if (result.has("message"))
+                {
+                    LL_WARNS("AvatarProperties") << "Failed to upload image after " << (MAX_UPLOAD_RETRIES + 1)
+                                                 << " attempts, state " << result["state"]
+                                                 << " message: " << result["message"] << LL_ENDL;
+                }
+                else
+                {
+                    LL_WARNS("AvatarProperties") << "Failed to upload image after " << (MAX_UPLOAD_RETRIES + 1)
+                                                << " attempts" << LL_ENDL;
+                }
+                return LLUUID::null;
+            }
+        }
+
+        // Success!
+        result_uuid = result["new_asset"].asUUID();
+        break;
     }
 
-    return result["new_asset"].asUUID();
+    return result_uuid;
 }
 
 enum EProfileImageType
@@ -693,6 +747,7 @@ LLPanelProfileSecondLife::LLPanelProfileSecondLife()
     , mWaitingForImageUpload(false)
     , mAllowPublish(false)
     , mHideAge(false)
+    , mAllowEdit(true)
 {
 }
 
@@ -708,6 +763,10 @@ LLPanelProfileSecondLife::~LLPanelProfileSecondLife()
     if (mAvatarNameCacheConnection.connected())
     {
         mAvatarNameCacheConnection.disconnect();
+    }
+    if (mMenuNameCacheConnection.connected())
+    {
+        mMenuNameCacheConnection.disconnect();
     }
 }
 
@@ -757,14 +816,15 @@ void LLPanelProfileSecondLife::onOpen(const LLSD& key)
     LLUUID avatar_id = getAvatarId();
 
     bool own_profile = getSelfProfile();
+    bool allow_edit = own_profile && mAllowEdit;
 
     mGroupList->setShowNone(!own_profile);
 
-    childSetVisible("notes_panel", !own_profile);
-    childSetVisible("settings_panel", own_profile);
-    childSetVisible("about_buttons_panel", own_profile);
+    childSetVisible("notes_panel", !allow_edit);
+    childSetVisible("settings_panel", allow_edit);
+    childSetVisible("about_buttons_panel", allow_edit);
 
-    if (own_profile)
+    if (allow_edit)
     {
         // Group list control cannot toggle ForAgent loading
         // Less than ideal, but viewing own profile via search is edge case
@@ -789,7 +849,7 @@ void LLPanelProfileSecondLife::onOpen(const LLSD& key)
         mAgentActionMenuButton->setMenu("menu_profile_other.xml", LLMenuButton::MP_BOTTOM_RIGHT);
     }
 
-    mDescriptionEdit->setParseHTML(!own_profile);
+    mDescriptionEdit->setParseHTML(!allow_edit);
 
     if (!own_profile)
     {
@@ -859,7 +919,7 @@ void LLPanelProfileSecondLife::resetData()
     resetLoading();
 
     // Set default image and 1:1 dimensions for it
-    mSecondLifePic->setValue("Generic_Person_Large");
+    mSecondLifePic->setValue(LLUUID());
 
     LLRect imageRect = mSecondLifePicLayout->getRect();
     mSecondLifePicLayout->reshape(imageRect.getWidth(), imageRect.getWidth());
@@ -1022,7 +1082,7 @@ void LLPanelProfileSecondLife::fillCommonData(const LLAvatarData* avatar_data)
     if (getSelfProfile())
     {
         mAllowPublish = avatar_data->flags & AVATAR_ALLOW_PUBLISH;
-        mShowInSearchCombo->setValue(mAllowPublish);
+        mShowInSearchCombo->setValue(mAllowPublish ? LLSD::Integer(1) : LLSD::Integer(0));
     }
 }
 
@@ -1280,7 +1340,7 @@ void LLPanelProfileSecondLife::setLoaded()
         {
             mHideAgeCombo->setEnabled(true);
         }
-        mDescriptionEdit->setEnabled(true);
+        mDescriptionEdit->setEnabled(mAllowEdit);
     }
 }
 
@@ -1456,7 +1516,7 @@ void LLPanelProfileSecondLife::onCommitMenu(const LLSD& userdata)
     }
     else if (item_name == "edit_display_name")
     {
-        LLAvatarNameCache::get(getAvatarId(), boost::bind(&LLPanelProfileSecondLife::onAvatarNameCacheSetName, this, _1, _2));
+        mMenuNameCacheConnection = LLAvatarNameCache::get(getAvatarId(), boost::bind(&LLPanelProfileSecondLife::onAvatarNameCacheSetName, this, _1, _2));
         LLFirstUse::setDisplayName(false);
     }
     else if (item_name == "edit_partner")
@@ -2066,6 +2126,7 @@ void LLPanelProfileFirstLife::onChangePhoto()
                 }
             });
             texture_floaterp->setLocalTextureEnabled(false);
+            texture_floaterp->setBakeTextureEnabled(false);
             texture_floaterp->setCanApply(false, true, false);
 
             parent_floater->addDependentFloater(mFloaterTexturePickerHandle);

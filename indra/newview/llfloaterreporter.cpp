@@ -417,8 +417,8 @@ void LLFloaterReporter::requestAbuseCategoriesCoro(std::string url, LLHandle<LLF
 {
     LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
     LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t
-        httpAdapter(new LLCoreHttpUtil::HttpCoroutineAdapter("requestAbuseCategoriesCoro", httpPolicy));
-    LLCore::HttpRequest::ptr_t httpRequest(new LLCore::HttpRequest);
+        httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>("requestAbuseCategoriesCoro", httpPolicy);
+    LLCore::HttpRequest::ptr_t httpRequest = std::make_shared<LLCore::HttpRequest>();
 
     LLSD result = httpAdapter->getAndSuspend(httpRequest, url);
 
@@ -660,9 +660,9 @@ void LLFloaterReporter::showFromAvatar(const LLUUID& avatar_id, const std::strin
 }
 
 // static
-void LLFloaterReporter::showFromChat(const LLUUID& avatar_id, const std::string& avatar_name, const std::string& time, const std::string& description)
+void LLFloaterReporter::showFromChatObj(const LLUUID& object_id, const std::string& time, const std::string& description)
 {
-    show(avatar_id, avatar_name);
+    show(object_id, LLStringUtil::null, LLUUID::null);
 
     LLStringUtil::format_map_t args;
     args["[MSG_TIME]"] = time;
@@ -671,8 +671,25 @@ void LLFloaterReporter::showFromChat(const LLUUID& avatar_id, const std::string&
     LLFloaterReporter *self = LLFloaterReg::findTypedInstance<LLFloaterReporter>("reporter");
     if (self)
     {
-        std::string description = self->getString("chat_report_format", args);
-        self->getChild<LLUICtrl>("details_edit")->setValue(description);
+        std::string description_frmt = self->getString("chat_report_format", args);
+        self->getChild<LLUICtrl>("details_edit")->setValue(description_frmt);
+    }
+}
+
+// static
+void LLFloaterReporter::showFromChatAv(const LLUUID& avatar_id, const std::string& avatar_name, const std::string& time, const std::string& description)
+{
+    show(avatar_id, avatar_name);
+
+    LLStringUtil::format_map_t args;
+    args["[MSG_TIME]"] = time;
+    args["[MSG_DESCRIPTION]"] = description;
+
+    LLFloaterReporter* self = LLFloaterReg::findTypedInstance<LLFloaterReporter>("reporter");
+    if (self)
+    {
+        std::string description_frmt = self->getString("chat_report_format", args);
+        self->getChild<LLUICtrl>("details_edit")->setValue(description_frmt);
     }
 }
 
@@ -860,7 +877,7 @@ void LLFloaterReporter::sendReportViaCaps(std::string url, std::string sshot_url
     if(!sshot_url.empty())
     {
         // try to upload screenshot
-        LLResourceUploadInfo::ptr_t uploadInfo(new  LLARScreenShotUploader(report, mResourceDatap->mAssetInfo.mUuid, mResourceDatap->mAssetInfo.mType));
+        LLResourceUploadInfo::ptr_t uploadInfo = std::make_shared<LLARScreenShotUploader>(report, mResourceDatap->mAssetInfo.mUuid, mResourceDatap->mAssetInfo.mType);
         LLViewerAssetUpload::EnqueueInventoryUpload(sshot_url, uploadInfo);
     }
     else

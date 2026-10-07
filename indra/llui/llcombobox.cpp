@@ -251,9 +251,24 @@ void    LLComboBox::resetDirty()
     }
 }
 
-bool LLComboBox::itemExists(const std::string& name)
+bool LLComboBox::itemExists(const std::string& name) const
 {
     return mList->getItemByLabel(name);
+}
+
+bool LLComboBox::valueExists(const std::string& value) const
+{
+    return mList->getItemByValue(value);
+}
+
+LLScrollListItem* LLComboBox::findItemByValue(const std::string& value) const
+{
+    return mList->getItemByValue(value);
+}
+
+std::vector<LLScrollListItem*> LLComboBox::getAllData() const
+{
+    return mList->getAllData();
 }
 
 // add item "name" to menu
@@ -521,7 +536,7 @@ bool LLComboBox::setCurrentByIndex(S32 index)
         if (item->getEnabled())
         {
             mList->selectItem(item, -1, true);
-            LLSD::String label = item->getColumn(0)->getValue().asString();
+            LLSD::String label = getSelectedItemLabel();
             if (mTextEntry)
             {
                 mTextEntry->setText(label);
@@ -1009,7 +1024,7 @@ void LLComboBox::setKeystrokeOnEsc(bool enable)
 
 void LLComboBox::onTextEntry(LLLineEditor* line_editor)
 {
-    if (mTextEntryCallback != NULL)
+    if (mTextEntryCallback != nullptr)
     {
         (mTextEntryCallback)(line_editor, LLSD());
     }
@@ -1029,7 +1044,7 @@ void LLComboBox::onTextEntry(LLLineEditor* line_editor)
             mList->deselectAllItems();
             mLastSelectedIndex = -1;
         }
-        if (mTextChangedCallback != NULL)
+        if (mTextChangedCallback != nullptr)
         {
             (mTextChangedCallback)(line_editor, LLSD());
         }
@@ -1077,7 +1092,7 @@ void LLComboBox::onTextEntry(LLLineEditor* line_editor)
         // RN: presumably text entry
         updateSelection();
     }
-    if (mTextChangedCallback != NULL)
+    if (mTextChangedCallback != nullptr)
     {
         (mTextChangedCallback)(line_editor, LLSD());
     }
@@ -1323,6 +1338,39 @@ bool LLComboBox::selectItemRange( S32 first, S32 last )
     return mList->selectItemRange(first, last);
 }
 
+void LLComboBox::addInfo(LLSD& info)
+{
+    LLUICtrl::addInfo(info);
+
+    if (mList && mList->getItemCount() > 0)
+    {
+        LLSD items_array;
+        std::vector<LLScrollListItem*> item_list = mList->getAllData();
+        for (std::vector<LLScrollListItem*>::iterator iter = item_list.begin(); iter != item_list.end(); ++iter)
+        {
+            if (LLScrollListItem* item = *iter)
+            {
+                LLSD item_info;
+                item_info["value"] = item->getValue();
+                if (item->getNumColumns() > 0)
+                {
+                    if (LLScrollListCell* cell = item->getColumn(0))
+                    {
+                        item_info["label"] = cell->getValue();
+                    }
+                }
+                items_array.append(item_info);
+            }
+        }
+        info["items"] = items_array;
+        info["item_count"] = mList->getItemCount();
+        info["current_selection"] = getSelectedItemLabel();
+    }
+    else
+    {
+        info["item_count"] = 0;
+    }
+}
 
 static LLDefaultChildRegistry::Register<LLIconsComboBox> register_icons_combo_box("icons_combo_box");
 

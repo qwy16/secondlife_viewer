@@ -99,8 +99,8 @@ LLToolBar::LLToolBar(const LLToolBar::Params& p)
     mWrap(p.wrap),
     mNeedsLayout(false),
     mModified(false),
-    mButtonPanel(NULL),
-    mCenteringStack(NULL),
+    mButtonPanel(nullptr),
+    mCenteringStack(nullptr),
     mPadLeft(p.pad_left),
     mPadRight(p.pad_right),
     mPadTop(p.pad_top),
@@ -108,17 +108,17 @@ LLToolBar::LLToolBar(const LLToolBar::Params& p)
     mPadBetween(p.pad_between),
     mMinGirth(p.min_girth),
     mPopupMenuHandle(),
-    mRightMouseTargetButton(NULL),
-    mStartDragItemCallback(NULL),
-    mHandleDragItemCallback(NULL),
-    mHandleDropCallback(NULL),
-    mButtonAddSignal(NULL),
-    mButtonEnterSignal(NULL),
-    mButtonLeaveSignal(NULL),
-    mButtonRemoveSignal(NULL),
+    mRightMouseTargetButton(nullptr),
+    mStartDragItemCallback(nullptr),
+    mHandleDragItemCallback(nullptr),
+    mHandleDropCallback(nullptr),
+    mButtonAddSignal(nullptr),
+    mButtonEnterSignal(nullptr),
+    mButtonLeaveSignal(nullptr),
+    mButtonRemoveSignal(nullptr),
     mDragAndDropTarget(false),
-    mCaretIcon(NULL),
-    mCenterPanel(NULL)
+    mCaretIcon(nullptr),
+    mCenterPanel(nullptr)
 {
     mButtonParams[LLToolBarEnums::BTNTYPE_ICONS_WITH_TEXT] = p.button_icon_and_text;
     mButtonParams[LLToolBarEnums::BTNTYPE_ICONS_ONLY] = p.button_icon;
@@ -792,6 +792,11 @@ void LLToolBar::updateLayoutAsNeeded()
     mNeedsLayout = false;
 }
 
+bool LLToolBar::postBuild()
+{
+    mCaretIcon = getChild<LLIconCtrl>("caret");
+    return LLUICtrl::postBuild();
+}
 
 void LLToolBar::draw()
 {
@@ -835,35 +840,36 @@ void LLToolBar::draw()
     LLUI::translate((F32)getRect().mLeft, (F32)getRect().mBottom);
 
     // Position the caret
-    if (!mCaretIcon)
+    // Todo: This shouldn't be on draw, but, as example, on hover
+    if (mCaretIcon)
     {
-        mCaretIcon = getChild<LLIconCtrl>("caret");
-    }
-
-    LLIconCtrl* caret = mCaretIcon;
-    caret->setVisible(false);
-    if (mDragAndDropTarget && !mButtonCommands.empty())
-    {
-        LLRect caret_rect = caret->getRect();
-        if (getOrientation(mSideType) == LLLayoutStack::HORIZONTAL)
+        mCaretIcon->setVisible(false);
+        if (mDragAndDropTarget && !mButtonCommands.empty())
         {
-            caret->setRect(LLRect(mDragx-caret_rect.getWidth()/2+1,
-                                  mDragy,
-                                  mDragx+caret_rect.getWidth()/2+1,
-                                  mDragy-mDragGirth));
+            LLRect caret_rect = mCaretIcon->getRect();
+            if (getOrientation(mSideType) == LLLayoutStack::HORIZONTAL)
+            {
+                mCaretIcon->setRect(LLRect(mDragx - caret_rect.getWidth() / 2 + 1,
+                    mDragy,
+                    mDragx + caret_rect.getWidth() / 2 + 1,
+                    mDragy - mDragGirth));
+            }
+            else
+            {
+                mCaretIcon->setRect(LLRect(mDragx,
+                    mDragy + caret_rect.getHeight() / 2,
+                    mDragx + mDragGirth,
+                    mDragy - caret_rect.getHeight() / 2));
+            }
+            mCaretIcon->setVisible(true);
         }
-        else
-        {
-            caret->setRect(LLRect(mDragx,
-                                  mDragy+caret_rect.getHeight()/2,
-                                  mDragx+mDragGirth,
-                                  mDragy-caret_rect.getHeight()/2));
-        }
-        caret->setVisible(true);
     }
 
     LLUICtrl::draw();
-    caret->setVisible(false);
+    if (mCaretIcon)
+    {
+        mCaretIcon->setVisible(false);
+    }
     mDragAndDropTarget = false;
 }
 
@@ -1054,7 +1060,7 @@ bool LLToolBar::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
     // if drop is set, it's time to call the callback to get the operation done
     if (handled && drop)
     {
-        handled = mHandleDropCallback(cargo_data, x, y, this);
+        handled = mHandleDropCallback(cargo_data, cargo_type, x, y, this);
     }
 
     // We accept only single tool drop on toolbars
@@ -1097,12 +1103,12 @@ LLToolBarButton::LLToolBarButton(const Params& p)
     mWidthRange(p.button_width),
     mDesiredHeight(p.desired_height),
     mId(""),
-    mIsEnabledSignal(NULL),
-    mIsRunningSignal(NULL),
-    mIsStartingSignal(NULL),
+    mIsEnabledSignal(nullptr),
+    mIsRunningSignal(nullptr),
+    mIsStartingSignal(nullptr),
     mIsDragged(false),
-    mStartDragItemCallback(NULL),
-    mHandleDragItemCallback(NULL),
+    mStartDragItemCallback(nullptr),
+    mHandleDragItemCallback(nullptr),
     mOriginalImageSelected(p.image_selected),
     mOriginalImageUnselected(p.image_unselected),
     mOriginalImagePressed(p.image_pressed),
@@ -1256,7 +1262,7 @@ void LLToolBar::LLCenterLayoutPanel::handleReshape(const LLRect& rect, bool by_u
 {
     LLLayoutPanel::handleReshape(rect, by_user);
 
-    if (!mReshapeCallback.empty())
+    if (mReshapeCallback != nullptr)
     {
         LLRect r;
         localRectToOtherView(mButtonPanel->getRect(), &r, gFloaterView);

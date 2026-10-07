@@ -489,58 +489,69 @@ bool LLPanel::initPanelXML(LLXMLNodePtr node, LLView *parent, LLXMLNodePtr outpu
         LL_RECORD_BLOCK_TIME(FTM_PANEL_SETUP);
 
         LLXMLNodePtr referenced_xml;
-        std::string xml_filename = mXMLFilename;
 
         // if the panel didn't provide a filename, check the node
-        if (xml_filename.empty())
+        if (mXMLFilename.empty())
         {
-            node->getAttributeString("filename", xml_filename);
-            setXMLFilename(xml_filename);
+            std::string temp_filename;
+            node->getAttributeString("filename", temp_filename);
+            setXMLFilename(temp_filename);
         }
+
+        // Cache singleton and filename to avoid repeated calls
+        LLUICtrlFactory* factory = LLUICtrlFactory::getInstance();
+
+        // Cache node name pointer to avoid repeated dereferencing
+        const LLStringTableEntry* node_name = node->getName();
+
+        // Cache registry to avoid repeated singleton access
+        const child_registry_t& registry = child_registry_t::instance();
 
         LLXUIParser parser;
 
-        if (!xml_filename.empty())
+        if (!mXMLFilename.empty())
         {
             if (output_node)
             {
                 //if we are exporting, we want to export the current xml
                 //not the referenced xml
-                parser.readXUI(node, params, LLUICtrlFactory::getInstance()->getCurFileName());
+                parser.readXUI(node, params, factory->getCurFileName());
                 Params output_params(params);
                 setupParamsForExport(output_params, parent);
-                output_node->setName(node->getName()->mString);
+                output_node->setName(node_name->mString);
                 parser.writeXUI(output_node, output_params, LLInitParam::default_parse_rules(), &default_params);
                 return true;
             }
 
-            LLUICtrlFactory::instance().pushFileName(xml_filename);
+            factory->pushFileName(mXMLFilename);
 
             LL_RECORD_BLOCK_TIME(FTM_EXTERNAL_PANEL_LOAD);
-            if (!LLUICtrlFactory::getLayeredXMLNode(xml_filename, referenced_xml))
+            if (!LLUICtrlFactory::getLayeredXMLNode(mXMLFilename, referenced_xml))
             {
-                LL_WARNS() << "Couldn't parse panel from: " << xml_filename << LL_ENDL;
+                LL_WARNS() << "Couldn't parse panel from: " << mXMLFilename << LL_ENDL;
 
                 return false;
             }
 
-            parser.readXUI(referenced_xml, params, LLUICtrlFactory::getInstance()->getCurFileName());
+            // Get filename after pushFileName
+            const std::string& updated_filename = factory->getCurFileName();
+            parser.readXUI(referenced_xml, params, updated_filename);
 
             // add children using dimensions from referenced xml for consistent layout
             setShape(params.rect);
-            LLUICtrlFactory::createChildren(this, referenced_xml, child_registry_t::instance());
+            LLUICtrlFactory::createChildren(this, referenced_xml, registry);
 
-            LLUICtrlFactory::instance().popFileName();
+            factory->popFileName();
         }
 
         // ask LLUICtrlFactory for filename, since xml_filename might be empty
-        parser.readXUI(node, params, LLUICtrlFactory::getInstance()->getCurFileName());
+        parser.readXUI(node, params, factory->getCurFileName());
 
         if (output_node)
         {
             Params output_params(params);
             setupParamsForExport(output_params, parent);
-            output_node->setName(node->getName()->mString);
+            output_node->setName(node_name->mString);
             parser.writeXUI(output_node, output_params, LLInitParam::default_parse_rules(), &default_params);
         }
 
@@ -552,7 +563,7 @@ bool LLPanel::initPanelXML(LLXMLNodePtr node, LLView *parent, LLXMLNodePtr outpu
         }
 
         // add children
-        LLUICtrlFactory::createChildren(this, node, child_registry_t::instance(), output_node);
+        LLUICtrlFactory::createChildren(this, node, registry, output_node);
 
         // Connect to parent after children are built, because tab containers
         // do a reshape() on their child panels, which requires that the children
@@ -662,12 +673,12 @@ bool LLPanel::childHasFocus(std::string_view id)
 // Prefer getChild<LLUICtrl>("foo")->setCommitCallback(boost:bind(...)),
 // which takes a generic slot.  Or use mCommitCallbackRegistrar.add() with
 // a named callback and reference it in XML.
-void LLPanel::childSetCommitCallback(std::string_view id, boost::function<void (LLUICtrl*,void*)> cb, void* data)
+void LLPanel::childSetCommitCallback(std::string_view id, std::function<void (LLUICtrl*,void*)> cb, void* data)
 {
     LLUICtrl* child = findChild<LLUICtrl>(id);
     if (child)
     {
-        child->setCommitCallback(boost::bind(cb, child, data));
+        child->setCommitCallback(std::bind(cb, child, data));
     }
 }
 
@@ -759,12 +770,12 @@ void LLPanel::childSetAction(std::string_view id, const commit_signal_t::slot_ty
     }
 }
 
-void LLPanel::childSetAction(std::string_view id, boost::function<void(void*)> function, void* value)
+void LLPanel::childSetAction(std::string_view id, std::function<void(void*)> function, void* value)
 {
     LLButton* button = findChild<LLButton>(id);
     if (button)
     {
-        button->setClickedCallback(boost::bind(function, value));
+        button->setClickedCallback(std::bind(function, value));
     }
 }
 

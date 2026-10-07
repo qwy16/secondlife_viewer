@@ -78,18 +78,21 @@ LLFloaterInspect::~LLFloaterInspect(void)
     {
         mCreatorNameCacheConnection.disconnect();
     }
-    if(!LLFloaterReg::instanceVisible("build"))
+    if (!LLApp::isExiting())
     {
-        if(LLToolMgr::getInstance()->getBaseTool() == LLToolCompInspect::getInstance())
+        if (!LLFloaterReg::instanceVisible("build"))
         {
-            LLToolMgr::getInstance()->clearTransientTool();
+            if (LLToolMgr::getInstance()->getBaseTool() == LLToolCompInspect::getInstance())
+            {
+                LLToolMgr::getInstance()->clearTransientTool();
+            }
+            // Switch back to basic toolset
+            LLToolMgr::getInstance()->setCurrentToolset(gBasicToolset);
         }
-        // Switch back to basic toolset
-        LLToolMgr::getInstance()->setCurrentToolset(gBasicToolset);
-    }
-    else
-    {
-        LLFloaterReg::showInstance("build", LLSD(), true);
+        else
+        {
+            LLFloaterReg::showInstance("build", LLSD(), true);
+        }
     }
 }
 
@@ -100,6 +103,7 @@ void LLFloaterInspect::onOpen(const LLSD& key)
     LLSelectMgr::getInstance()->setForceSelection(forcesel);    // restore previouis value
     mObjectSelection = LLSelectMgr::getInstance()->getSelection();
     refresh();
+    mDirty = false;
 }
 void LLFloaterInspect::onClickCreatorProfile()
 {
@@ -220,7 +224,8 @@ void LLFloaterInspect::refresh()
         }
 
         time_t timestamp = (time_t) (obj->mCreationDate/1000000);
-        std::string timeStr = getString("timeStamp");
+        static bool use_24h = gSavedSettings.getBOOL("Use24HourClock");
+        std::string timeStr = use_24h ? getString("timeStamp") : getString("timeStampAMPM");
         LLSD substitution;
         substitution["datetime"] = (S32) timestamp;
         LLStringUtil::format (timeStr, substitution);

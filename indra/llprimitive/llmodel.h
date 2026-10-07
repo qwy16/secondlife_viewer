@@ -33,15 +33,12 @@
 #include "m4math.h"
 #include <queue>
 
-#include <boost/align/aligned_allocator.hpp>
-
 class daeElement;
 class domMesh;
 
 #define MAX_MODEL_FACES 8
 
-LL_ALIGN_PREFIX(16)
-class LLMeshSkinInfo : public LLRefCount
+class alignas(16) LLMeshSkinInfo : public LLRefCount
 {
     LL_ALIGN_NEW
 public:
@@ -65,17 +62,16 @@ public:
     // cached multiply of mBindShapeMatrix and mInvBindMatrix
     matrix_list_t mBindPoseMatrix;
 
-    LL_ALIGN_16(LLMatrix4a mBindShapeMatrix);
+    LLMatrix4a mBindShapeMatrix;
 
     float mPelvisOffset;
     bool mLockScaleIfJointPosition;
     bool mInvalidJointsScrubbed;
     bool mJointNumsInitialized;
     U64 mHash = 0;
-} LL_ALIGN_POSTFIX(16);
+};
 
-LL_ALIGN_PREFIX(16)
-class LLModel : public LLVolume
+class alignas(16) LLModel : public LLVolume
 {
     LL_ALIGN_NEW
 public:
@@ -160,6 +156,12 @@ public:
     bool loadSkinInfo(LLSD& header, std::istream& is);
     bool loadDecomposition(LLSD& header, std::istream& is);
 
+    enum EWriteModelMode
+    {
+        WRITE_NO = 0,
+        WRITE_BINARY,
+        WRITE_HUMAN,
+    };
     static LLSD writeModel(
         std::ostream& ostr,
         LLModel* physics,
@@ -171,14 +173,14 @@ public:
         bool upload_skin,
         bool upload_joints,
         bool lock_scale_if_joint_position,
-        bool nowrite = false,
+        EWriteModelMode write_mode = WRITE_BINARY,
         bool as_slm = false,
         int submodel_id = 0);
 
     static LLSD writeModelToStream(
         std::ostream& ostr,
         LLSD& mdl,
-        bool nowrite = false, bool as_slm = false);
+        EWriteModelMode write_mode = WRITE_BINARY, bool as_slm = false);
 
     void ClearFacesAndMaterials() { mVolumeFaces.clear(); mMaterialList.clear(); }
 
@@ -202,6 +204,7 @@ public:
 
     void sortVolumeFacesByMaterialName();
     void normalizeVolumeFaces();
+    void normalizeVolumeFacesAndWeights();
     void trimVolumeFacesToSize(U32 new_count = LL_SCULPT_MESH_MAX_FACES, LLVolume::face_list_t* remainder = NULL);
     void remapVolumeFaces();
     void optimizeVolumeFaces();
@@ -298,7 +301,8 @@ public:
     S32 mDecompID;
 
     void setConvexHullDecomposition(
-        const convex_hull_decomposition& decomp);
+        const convex_hull_decomposition& decomp,
+        const std::vector<LLModel::PhysicsMesh>& decomp_mesh);
     void updateHullCenters();
 
     LLVector3 mCenterOfHullCenters;
@@ -315,7 +319,7 @@ public:
     // A model/object can only have 8 faces, spillover faces will
     // be moved to new model/object and assigned a submodel id.
     int mSubmodelID;
-} LL_ALIGN_POSTFIX(16);
+};
 
 typedef std::vector<LLPointer<LLModel> >    model_list;
 typedef std::queue<LLPointer<LLModel> > model_queue;

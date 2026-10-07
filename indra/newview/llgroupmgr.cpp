@@ -869,18 +869,14 @@ void LLGroupMgr::removeObserver(LLGroupMgrObserver* observer)
     {
         return;
     }
-    observer_multimap_t::iterator it;
-    it = mObservers.find(observer->getID());
-    while (it != mObservers.end())
+    observer_multimap_t::iterator it = mObservers.lower_bound(observer->getID());
+    observer_multimap_t::iterator end = mObservers.upper_bound(observer->getID());
+    for (; it != end; ++it)
     {
         if (it->second == observer)
         {
             mObservers.erase(it);
             break;
-        }
-        else
-        {
-            ++it;
         }
     }
 }
@@ -1975,8 +1971,8 @@ void LLGroupMgr::getGroupBanRequestCoro(std::string url, LLUUID group_id)
 {
     LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
     LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t
-        httpAdapter(new LLCoreHttpUtil::HttpCoroutineAdapter("groupMembersRequest", httpPolicy));
-    LLCore::HttpRequest::ptr_t httpRequest(new LLCore::HttpRequest);
+        httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>("groupMembersRequest", httpPolicy);
+    LLCore::HttpRequest::ptr_t httpRequest = std::make_shared<LLCore::HttpRequest>();
 
     std::string finalUrl = url + "?group_id=" + group_id.asString();
 
@@ -2004,10 +2000,10 @@ void LLGroupMgr::postGroupBanRequestCoro(std::string url, LLUUID group_id,
 {
     LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
     LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t
-        httpAdapter(new LLCoreHttpUtil::HttpCoroutineAdapter("groupMembersRequest", httpPolicy));
-    LLCore::HttpRequest::ptr_t httpRequest(new LLCore::HttpRequest);
-    LLCore::HttpHeaders::ptr_t httpHeaders(new LLCore::HttpHeaders);
-    LLCore::HttpOptions::ptr_t httpOptions(new LLCore::HttpOptions);
+        httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>("groupMembersRequest", httpPolicy);
+    LLCore::HttpRequest::ptr_t httpRequest = std::make_shared<LLCore::HttpRequest>();
+    LLCore::HttpHeaders::ptr_t httpHeaders = std::make_shared<LLCore::HttpHeaders>();
+    LLCore::HttpOptions::ptr_t httpOptions = std::make_shared<LLCore::HttpOptions>();
 
     httpOptions->setFollowRedirects(false);
 
@@ -2141,9 +2137,9 @@ void LLGroupMgr::groupMembersRequestCoro(std::string url, LLUUID group_id, U32 p
         << ", sort_column: " << sort_column << ", sort_descending: " << sort_descending << LL_ENDL;
     LLCore::HttpRequest::policy_t httpPolicy(LLCore::HttpRequest::DEFAULT_POLICY_ID);
     LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t
-        httpAdapter(new LLCoreHttpUtil::HttpCoroutineAdapter("groupMembersRequest", httpPolicy));
-    LLCore::HttpRequest::ptr_t httpRequest(new LLCore::HttpRequest);
-    LLCore::HttpOptions::ptr_t httpOpts(new LLCore::HttpOptions);
+        httpAdapter = std::make_shared<LLCoreHttpUtil::HttpCoroutineAdapter>("groupMembersRequest", httpPolicy);
+    LLCore::HttpRequest::ptr_t httpRequest = std::make_shared<LLCore::HttpRequest>();
+    LLCore::HttpOptions::ptr_t httpOpts = std::make_shared<LLCore::HttpOptions>();
 
     LLSD postData = LLSD::emptyMap();
     postData["group_id"] = group_id;

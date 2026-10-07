@@ -21,8 +21,12 @@
         Bandwidth
     </panel.string>
     <panel.string
-     name="time">
+     name="time_ampm">
         [hour12, datetime, slt]:[min, datetime, slt] [ampm, datetime, slt] [timezone,datetime, slt]
+    </panel.string>
+    <panel.string
+     name="time">
+        [hour, datetime, slt]:[min, datetime, slt] [timezone,datetime, slt]
     </panel.string>
     <panel.string
      name="timeTooltip">
@@ -86,8 +90,8 @@
      height="18"
      left="0" 
      name="balance"
-     tool_tip="Click to refresh your L$ balance"
-     v_pad="4"
+     tool_tip="L$ [AMT]&#10;Click to refresh your L$ balance.&#10;Double-click to display or hide your L$ balance."
+     v_pad="2"
      top="0"
      wrap="false" 
      value="L$??" 
@@ -98,7 +102,7 @@
      follows="right|top|bottom"
      image_hover_unselected="PushButton_Over"
      image_unselected="PushButton_Off"
-     image_pressed="PushButton_Press"
+     image_pressed="PushButton_Selected"
      height="18"
      label="Buy L$"
      label_color="White"
@@ -118,7 +122,7 @@
      image_overlay_alignment="left"
      image_hover_unselected="PushButton_Over"
      image_unselected="PushButton_Off"
-     image_pressed="PushButton_Press"
+     image_pressed="PushButton_Selected"
      height="18"
      label="Shop"
      label_color="White"
@@ -136,7 +140,7 @@
      follows="right|top"
      halign="right"
      height="16"
-     top="5"
+     top="3"
      layout="topleft"
      left_pad="0"
      name="TimeText"

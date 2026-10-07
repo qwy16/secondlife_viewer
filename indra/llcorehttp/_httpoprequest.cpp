@@ -153,7 +153,7 @@ HttpOpRequest::HttpOpRequest()
       mPolicyRetryLimit(HTTP_RETRY_COUNT_DEFAULT),
       mPolicyMinRetryBackoff(HttpTime(HTTP_RETRY_BACKOFF_MIN_DEFAULT)),
       mPolicyMaxRetryBackoff(HttpTime(HTTP_RETRY_BACKOFF_MAX_DEFAULT)),
-      mCallbackSSLVerify(NULL)
+      mCallbackSSLVerify(nullptr)
 {
     // *NOTE:  As members are added, retry initialization/cleanup
     // may need to be extended in @see prepareRequest().
@@ -272,7 +272,7 @@ void HttpOpRequest::visitNotifier(HttpRequest * request)
         response->setContentType(mReplyConType);
         response->setRetries(mPolicyRetries, mPolicy503Retries);
 
-        HttpResponse::TransferStats::ptr_t stats = HttpResponse::TransferStats::ptr_t(new HttpResponse::TransferStats);
+        HttpResponse::TransferStats::ptr_t stats = std::make_shared<HttpResponse::TransferStats>();
 
         curl_easy_getinfo(mCurlHandle, CURLINFO_SIZE_DOWNLOAD, &stats->mSizeDownload);
         curl_easy_getinfo(mCurlHandle, CURLINFO_TOTAL_TIME, &stats->mTotalTime);
@@ -538,6 +538,7 @@ HttpStatus HttpOpRequest::prepareRequest(HttpService * service)
     long sslHostV(0L);
     long dnsCacheTimeout(-1L);
     long nobody(0L);
+    curl_off_t lastModified(0L);
 
     if (mReqOptions)
     {
@@ -546,6 +547,7 @@ HttpStatus HttpOpRequest::prepareRequest(HttpService * service)
         sslHostV = mReqOptions->getSSLVerifyHost() ? 2L : 0L;
         dnsCacheTimeout = mReqOptions->getDNSCacheTimeout();
         nobody = mReqOptions->getHeadersOnly() ? 1L : 0L;
+        lastModified = (curl_off_t)mReqOptions->getLastModified();
     }
     check_curl_easy_setopt(mCurlHandle, CURLOPT_FOLLOWLOCATION, follow_redirect);
 
@@ -553,6 +555,17 @@ HttpStatus HttpOpRequest::prepareRequest(HttpService * service)
     check_curl_easy_setopt(mCurlHandle, CURLOPT_SSL_VERIFYHOST, sslHostV);
 
     check_curl_easy_setopt(mCurlHandle, CURLOPT_NOBODY, nobody);
+
+    if (lastModified)
+    {
+        check_curl_easy_setopt(mCurlHandle, CURLOPT_TIMECONDITION, CURL_TIMECOND_IFMODSINCE);
+#if (LIBCURL_VERSION_NUM >= 0x073B00)
+        // requires curl 7.59.0
+        check_curl_easy_setopt(mCurlHandle, CURLOPT_TIMEVALUE_LARGE, lastModified);
+#else
+        check_curl_easy_setopt(mCurlHandle, CURLOPT_TIMEVALUE, (long)lastModified);
+#endif
+    }
 
     // The Linksys WRT54G V5 router has an issue with frequent
     // DNS lookups from LAN machines.  If they happen too often,
@@ -951,7 +964,7 @@ size_t HttpOpRequest::headerCallback(void * data, size_t size, size_t nmemb, voi
         // Save headers in response
         if (! op->mReplyHeaders)
         {
-            op->mReplyHeaders = HttpHeaders::ptr_t(new HttpHeaders);
+            op->mReplyHeaders = std::make_shared<HttpHeaders>();
         }
         op->mReplyHeaders->append(name, value ? value : "");
     }

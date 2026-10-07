@@ -32,6 +32,7 @@
 #include "lldrawable.h"
 #include "llviewerregion.h"
 #include "llagentcamera.h"
+#include "llmemory.h"
 #include "llsdserialize.h"
 #include "llworld.h" // For LLWorld::getInstance()
 //static variables
@@ -486,14 +487,22 @@ void LLVOCacheEntry::updateDebugSettings()
     //min radius: all objects within this radius remain loaded in memory
     static LLCachedControl<F32> min_radius(gSavedSettings,"SceneLoadMinRadius");
     static const F32 MIN_RADIUS = 1.0f;
-    const F32 draw_radius = gAgentCamera.mDrawDistance;
+
+    F32 draw_radius = gAgentCamera.mDrawDistance;
+    const F32 mem_factor = LLMemory::getSystemMemoryBudgetFactor();
+    if (mem_factor > 1.f)
+    {
+        // Factor is intended to go from 1.0 to 2.0
+        // For safety cap reduction at 50%, we don't want to go below half of draw distance
+        draw_radius = llmax(draw_radius / mem_factor, draw_radius / 2.f);
+    }
     const F32 clamped_min_radius = llclamp((F32) min_radius, MIN_RADIUS, draw_radius); // [1, mDrawDistance]
     sNearRadius = MIN_RADIUS + ((clamped_min_radius - MIN_RADIUS) * adjust_factor);
 
     // a percentage of draw distance beyond which all objects outside of view frustum will be unloaded, regardless of pixel threshold
-    static LLCachedControl<F32> rear_max_radius_frac(gSavedSettings,"SceneLoadRearMaxRadiusFraction");
+    static LLCachedControl<F32> rear_max_radius_frac(gSavedSettings,"SceneLoadRearMaxRadiusFraction", .75f);
     const F32 min_radius_plus_one = sNearRadius + 1.f;
-    const F32 max_radius = rear_max_radius_frac * gAgentCamera.mDrawDistance;
+    const F32 max_radius = rear_max_radius_frac * draw_radius;
     const F32 clamped_max_radius = llclamp(max_radius, min_radius_plus_one, draw_radius); // [sNearRadius, mDrawDistance]
     sRearFarRadius = min_radius_plus_one + ((clamped_max_radius - min_radius_plus_one) * adjust_factor);
 
@@ -1243,7 +1252,7 @@ void LLVOCache::removeCache(ELLPath location, bool started)
     std::string cache_dir = gDirUtilp->getExpandedFilename(location, object_cache_dirname);
     LL_INFOS() << "Removing cache at " << cache_dir << LL_ENDL;
     gDirUtilp->deleteFilesInDir(cache_dir, mask); //delete all files
-    LLFile::rmdir(cache_dir);
+    LLFile::remove(cache_dir);
 
     clearCacheInMemory();
     mInitialized = false;
@@ -1363,7 +1372,7 @@ void LLVOCache::removeFromCache(HeaderEntryInfo* entry)
     std::string filename;
     getObjectCacheFilename(entry->mHandle, filename);
     LL_WARNS("GLTF", "VOCache") << "Removing object cache for handle " << entry->mHandle << "Filename: " << filename << LL_ENDL;
-    LLAPRFile::remove(filename, mLocalAPRFilePoolp);
+    LLFile::remove(filename);
 
     // Note: `removeFromCache` should take responsibility for cleaning up all cache artefacts specfic to the handle/entry.
     // as such this now includes the generic extras
@@ -1387,7 +1396,7 @@ void LLVOCache::readCacheHeader()
     clearCacheInMemory();
 
     bool success = true ;
-    if (LLAPRFile::isExist(mHeaderFileName, mLocalAPRFilePoolp))
+    if (LLFile::isfile(mHeaderFileName))
     {
         LLAPRFile apr_file(mHeaderFileName, APR_READ|APR_BINARY, mLocalAPRFilePoolp);
 
@@ -1747,7 +1756,7 @@ void LLVOCache::writeToCache(U64 handle, const LLUUID& id, const LLVOCacheEntry:
 
     if(mReadOnly)
     {
-        LL_WARNS() << "Not writing cache for " << filename << " (handle:" << handle << "): Cache is currently in read-only mode." << LL_ENDL;
+        LL_INFOS() << "Not writing cache for " << filename << " (handle:" << handle << "): Cache is currently in read-only mode." << LL_ENDL;
         return ;
     }
 
@@ -1788,7 +1797,10 @@ void LLVOCache::writeToCache(U64 handle, const LLUUID& id, const LLVOCacheEntry:
 
     if(!dirty_cache)
     {
-        LL_WARNS() << "Skipping write to cache for " << filename << " (handle:" << handle << "): cache not dirty" << LL_ENDL;
+        if (!LLAppViewer::instance()->isQuitting())
+        {
+            LL_WARNS() << "Skipping write to cache for " << filename << " (handle:" << handle << "): cache not dirty" << LL_ENDL;
+        }
         return ; //nothing changed, no need to update.
     }
 
@@ -1875,11 +1887,11 @@ void LLVOCache::removeGenericExtrasForHandle(U64 handle)
     }
 
     // NOTE: when removing the extras, we must also remove the objects so the simulator will send us a full upddate with the valid overrides
-    auto* entry = mHandleEntryMap[handle];
-    if (entry)
+    handle_entry_map_t::iterator iter = mHandleEntryMap.find(handle);
+    if (iter != mHandleEntryMap.end())
     {
-        LL_WARNS("GLTF", "VOCache") << "Removing generic extras for handle " << entry->mHandle << "Filename: " << getObjectCacheExtrasFilename(handle) << LL_ENDL;
-        removeEntry(entry);
+        LL_WARNS("GLTF", "VOCache") << "Removing generic extras for handle " << handle << "Filename: " << getObjectCacheExtrasFilename(handle) << LL_ENDL;
+        removeEntry(iter->second);
     }
     else
     {

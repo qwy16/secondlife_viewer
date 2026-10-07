@@ -95,6 +95,7 @@ class LLVOAvatar :
 public:
     friend class LLVOAvatarSelf;
     friend class LLAvatarCheckImpostorMode;
+    friend class LLVisualParamHint;
 
 /********************************************************************************
  **                                                                            **
@@ -233,6 +234,7 @@ public:
     virtual void            onActiveOverrideMeshesChanged();
 
     /*virtual*/ const LLUUID&   getID() const;
+    /*virtual*/ std::string     getDebugName() const;
     /*virtual*/ void            addDebugText(const std::string& text);
     /*virtual*/ F32             getTimeDilation();
     /*virtual*/ void            getGround(const LLVector3 &inPos, LLVector3 &outPos, LLVector3 &outNorm);
@@ -263,7 +265,7 @@ public:
 
 
 private: //aligned members
-    LL_ALIGN_16(LLVector4a  mImpostorExtents[2]);
+    LLVector4a  mImpostorExtents[2];
 
     //--------------------------------------------------------------------
     // Updates
@@ -301,11 +303,17 @@ public:
                                                      const F32 max_attachment_complexity,
                                                      LLVOVolume::texture_cost_t& textures,
                                                      U32& cost,
-                                                     hud_complexity_list_t& hud_complexity_list,
-                                                     object_complexity_list_t& object_complexity_list);
+                                                     U32& visible_triangle_count,
+                                                     F32& est_triangle_count,
+                                                     F32& surface_area,
+                                                     LLHUDComplexity& hud_object_complexity,
+                                                     LLObjectComplexity& object_complexity);
     void            calculateUpdateRenderComplexity();
     static const U32 VISUAL_COMPLEXITY_UNKNOWN;
     void            updateVisualComplexity();
+    // Mark that an attachment needs complexity recalculation
+    void markAttachmentComplexityDirty(const LLUUID& object_id, bool force_reset_attachment = false);
+    void markBodyPartsComplexityDirty();
 
     void placeProfileQuery();
     void readProfileQuery(S32 retries);
@@ -330,16 +338,16 @@ public:
 
 
     // avatar render cost
-    U32             getVisualComplexity()           { return mVisualComplexity;             };
+    U32             getVisualComplexity()           { return mVisualComplexity; };
 
     // surface area calculation
-    F32             getAttachmentSurfaceArea()      { return mAttachmentSurfaceArea;        };
+    F32             getAttachmentSurfaceArea()      { return mAttachmentSurfaceArea; };
 
-    U32             getReportedVisualComplexity()                   { return mReportedVisualComplexity;             };  // Numbers as reported by the SL server
-    void            setReportedVisualComplexity(U32 value)          { mReportedVisualComplexity = value;            };
+    U32             getReportedVisualComplexity()   { return mReportedVisualComplexity; };  // Numbers as reported by the SL server
+    void            setReportedVisualComplexity(U32 value) { mReportedVisualComplexity = value; };
 
-    S32             getUpdatePeriod()               { return mUpdatePeriod;         };
-    const LLColor4 &  getMutedAVColor()             { return mMutedAVColor;         };
+    S32             getUpdatePeriod()               { return mUpdatePeriod; };
+    const LLColor4 &  getMutedAVColor()             { return mMutedAVColor; };
     static void     updateImpostorRendering(U32 newMaxNonImpostorsValue);
 
     void            idleUpdateBelowWater();
@@ -353,7 +361,7 @@ public:
     //--------------------------------------------------------------------
 public:
     static S32      sRenderName;
-    static bool     sRenderGroupTitles;
+    static S32      sRenderGroupTitles;
     static const U32 NON_IMPOSTORS_MAX_SLIDER; /* Must equal the maximum allowed the RenderAvatarMaxNonImpostors
                                                 * slider in panel_preferences_graphics1.xml */
     static U32      sMaxNonImpostors; // affected by control "RenderAvatarMaxNonImpostors"
@@ -400,14 +408,13 @@ public:
 
     bool            isTooComplex() const;
     bool            visualParamWeightsAreDefault();
-    virtual bool    getIsCloud() const;
+    virtual bool    getHasMissingParts() const;
     bool            isFullyTextured() const;
     bool            hasGray() const;
-    S32             getRezzedStatus() const; // 0 = cloud, 1 = gray, 2 = textured, 3 = textured and fully downloaded.
+    S32             getRezzedStatus() const; // 0 = cloud, 1 = gray, 2 = textured, 3 = waiting for attachments, 4 = full.
     void            updateRezzedStatusTimers(S32 status);
 
     S32             mLastRezzedStatus;
-
 
     void            startPhase(const std::string& phase_name);
     void            stopPhase(const std::string& phase_name, bool err_check = true);
@@ -427,6 +434,7 @@ protected:
 
 private:
     bool            mFirstFullyVisible;
+    bool            mWaitingForMeshes;
     F32             mFirstDecloudTime;
     LLFrameTimer    mFirstAppearanceMessageTimer;
 
@@ -580,18 +588,87 @@ private:
     // CPU render time in ms
     F32 mCPURenderTime = 0.f;
 
-    // the isTooComplex method uses these mutable values to avoid recalculating too frequently
-    // DEPRECATED -- obsolete avatar render cost values
-    mutable U32  mVisualComplexity;
-    mutable bool mVisualComplexityStale;
-    U32          mReportedVisualComplexity; // from other viewers through the simulator
-
     mutable bool        mCachedInMuteList;
     mutable F64         mCachedMuteListUpdateTime;
     mutable bool        mCachedInBuddyList = false;
     mutable F64         mCachedBuddyListUpdateTime = 0.0;
 
     VisualMuteSettings      mVisuallyMuteSetting;           // Always or never visually mute this AV
+
+    //--------------------------------------------------------------------
+    // Complexity calculation and caching
+    //--------------------------------------------------------------------
+
+private:
+    // Structure to cache complexity metrics for individual attachments or components
+    struct ComplexityComponent
+    {
+        U32 render_cost;
+        U32 triangle_count;
+        F32 surface_area;
+        F32 est_triangle_count;
+        LLVOVolume::texture_cost_t textures;
+        F64 last_update_time;
+        bool needs_update;
+
+        // For tracking HUD and object lists
+        LLHUDComplexity hud_complexity;
+        LLObjectComplexity object_complexity;
+
+        ComplexityComponent()
+            : render_cost(0)
+            , triangle_count(0)
+            , surface_area(0.f)
+            , est_triangle_count(0.f)
+            , last_update_time(0.0)
+            , needs_update(true)
+        {
+        }
+
+        void reset()
+        {
+            render_cost = 0;
+            triangle_count = 0;
+            surface_area = 0.f;
+            est_triangle_count = 0.f;
+            textures.clear();
+            hud_complexity.reset();
+            object_complexity.reset();
+            needs_update = true;
+        }
+    };
+
+    void calculateAttachmentComplexity(LLViewerObject* attached_object,
+        const F32 max_attachment_complexity,
+        ComplexityComponent& cache);
+    void calculateBodyPartsComplexity(ComplexityComponent& cache);
+    U32 calculateBodyPartsComplexity();
+
+    // return true, if a valid control avatar.
+    bool calculateControlAvatarComplexity(ComplexityComponent& cache, const F32 max_attachment_complexity);
+
+    void accumulateComplexityComponent(const ComplexityComponent& component,
+        U32& total_cost,
+        hud_complexity_list_t& hud_list,
+        object_complexity_list_t& object_list);
+
+    bool shouldUpdateComplexityComponent(const ComplexityComponent& component) const;
+    void performPartialComplexityUpdate(const F32 max_attachment_complexity);
+
+    void processComplexityCostChange(const hud_complexity_list_t &hud_complexity_list, const object_complexity_list_t &object_complexity_list);
+
+    // Todo: probably safe to store by local instead of global id
+    // since they should be unique to this avatar, but local id might be not known.
+    typedef std::map<LLUUID, ComplexityComponent> complexity_cache_map_t;
+    complexity_cache_map_t mComplexityCache; // Cache per-attachment complexity
+    ComplexityComponent mBodyPartsComplexity; // Cache for body parts (mesh, eyes, hair, etc)
+    ComplexityComponent mControlAvatarComplexity; // Cache for animated object control avatar
+
+    // the isTooComplex method uses these mutable values to avoid recalculating too frequently
+    // DEPRECATED -- obsolete avatar render cost values
+    mutable U32  mVisualComplexity;
+    mutable bool mVisualComplexityStale;
+    U32          mReportedVisualComplexity; // from other viewers through the simulator
 
     //--------------------------------------------------------------------
     // animated object status
@@ -621,7 +698,6 @@ public:
 protected:
     void        updateVisibility();
 private:
-    F32         mVisibilityPreference;
     U32         mVisibilityRank;
     bool        mVisible;
 
@@ -629,7 +705,6 @@ private:
     // Shadowing
     //--------------------------------------------------------------------
 public:
-    void        updateShadowFaces();
     LLDrawable* mShadow;
 private:
     LLFace*     mShadow0Facep;
@@ -670,8 +745,6 @@ private:
     LLVector3   mLastAnimExtents[2];
     LLVector3   mLastAnimBasePos;
 
-    LLCachedControl<bool> mRenderUnloadedAvatar;
-
     //--------------------------------------------------------------------
     // Wind rippling in clothes
     //--------------------------------------------------------------------
@@ -690,10 +763,13 @@ private:
     // Culling
     //--------------------------------------------------------------------
 public:
+    static void setCullNeedsUpdate() { sAvatarCullNeedsUpdate = true; }
     static void cullAvatarsByPixelArea();
     bool        isCulled() const { return mCulled; }
 private:
     bool        mCulled;
+    static bool sAvatarCullNeedsUpdate;
+    static F64  sLastCullUpdateTime; // Time of last cull update
 
     //--------------------------------------------------------------------
     // Constants
@@ -723,7 +799,7 @@ public:
 
     bool            isFullyBaked();
     static bool     areAllNearbyInstancesBaked(S32& grey_avatars);
-    static void     getNearbyRezzedStats(std::vector<S32>& counts, F32& avg_cloud_time, S32& cloud_avatars);
+    static void     getNearbyRezzedStats(std::vector<S32>& counts, F32& avg_cloud_time, S32& cloud_avatars, S32& pending_meshes, S32& control_avatars);
     static std::string rezStatusToString(S32 status);
 
     //--------------------------------------------------------------------
@@ -742,7 +818,7 @@ protected:
     LLViewerTexLayerSet*  getTexLayerSet(const U32 index) const { return dynamic_cast<LLViewerTexLayerSet*>(mBakedTextureDatas[index].mTexLayerSet);    }
 
 
-    LLLoadedCallbackEntry::source_callback_list_t mCallbackTextureList ;
+    LLLoadedCallbackEntry::source_callback_list_t mCallbackTextureList;
     bool mLoadedCallbacksPaused;
     S32 mLoadedCallbackTextures; // count of 'loaded' baked textures, filled from mCallbackTextureList
     LLFrameTimer mLastTexCallbackAddedTime;
@@ -872,9 +948,26 @@ protected:
  **                    APPEARANCE
  **/
 
+public:
+    // Used when an AvatarAppearance UDP message is received before the
+    // corresponding avatar could be created.
+    static void registerEarlyAppearance(const LLUUID& av_id)
+    {
+        sEarlyAppearanceList.emplace(av_id);
+    }
+
+    // Entries left behind by agents who never get instantiated (e.g. an
+    // AvatarAppearance message arrives for an avatar we never rez) are a
+    // small resource leak. Teleporting to another region invalidates the
+    // whole list, since it was only ever relevant to avatars in the region
+    // we're leaving, so clear it out at that point to bound the leak.
+    static void resetEarlyAppearanceList()
+    {
+        sEarlyAppearanceList.clear();
+    }
+
     LLPointer<LLAppearanceMessageContents>  mLastProcessedAppearance;
 
-public:
     void            parseAppearanceMessage(LLMessageSystem* mesgsys, LLAppearanceMessageContents& msg);
     void            processAvatarAppearance(LLMessageSystem* mesgsys);
     void            applyParsedAppearanceMessage(LLAppearanceMessageContents& contents, bool slam_params);
@@ -905,6 +998,8 @@ private:
     F32             mLastAppearanceBlendTime;
     bool            mIsEditingAppearance; // flag for if we're actively in appearance editing mode
     bool            mUseLocalAppearance; // flag for if we're using a local composite
+
+    static uuid_list_t  sEarlyAppearanceList;
 
     //--------------------------------------------------------------------
     // Visibility
@@ -1016,7 +1111,7 @@ public:
     void            startTyping() { mTyping = true; mTypingTimer.reset(); }
     void            stopTyping() { mTyping = false; }
 private:
-    bool            mVisibleChat;
+    bool            mVisibleChat = false;
 
     //--------------------------------------------------------------------
     // Lip synch morphs
@@ -1119,7 +1214,7 @@ private:
     bool            mNameFriend;
     bool            mNameCloud;
     F32             mNameAlpha;
-    bool            mRenderGroupTitles;
+    S32             mRenderGroupTitles;
 
     //--------------------------------------------------------------------
     // Display the name (then optionally fade it out)
@@ -1198,11 +1293,12 @@ public:
     static F32          sGreyUpdateTime; // Last time stats were updated (to prevent multiple updates per frame)
 protected:
     S32                 getUnbakedPixelAreaRank();
-    bool                mHasGrey;
+    bool                mHasGrey = false;
 private:
     F32                 mMinPixelArea;
     F32                 mMaxPixelArea;
-    F32                 mAdjustedPixelArea;
+    F32                 mAdjustedPixelArea = 0.f;
+    F32                 mLastCulledPixelArea = -1.f; // Pixel area when last culled, for tracking significant changes
     std::string         mDebugText;
     std::string         mBakedTextureDebugText;
 

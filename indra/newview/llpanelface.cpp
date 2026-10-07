@@ -276,7 +276,7 @@ LLRender::eTexIndex LLPanelFace::getMatTextureChannel()
             return LLRender::NORMAL_MAP;
         break;
     case MATTYPE_SPECULAR: // "Shininess (specular)"
-        if (getCurrentNormalMap().notNull())
+        if (getCurrentSpecularMap().notNull())
             return LLRender::SPECULAR_MAP;
         break;
     }
@@ -543,10 +543,6 @@ LLPanelFace::~LLPanelFace()
 
 void LLPanelFace::onVisibilityChange(bool new_visibility)
 {
-    if (new_visibility)
-    {
-        gAgent.showLatestFeatureNotification("gltf");
-    }
     LLPanel::onVisibilityChange(new_visibility);
 }
 
@@ -856,6 +852,59 @@ struct LLPanelFaceSetAlignedTEFunctor : public LLSelectedTEFunctor
                 LLPanelFace::LLSelectedTEMaterial::setSpecularRepeatX(mPanel, uv_scale.mV[VX], te, object->getID());
                 LLPanelFace::LLSelectedTEMaterial::setSpecularRepeatY(mPanel, uv_scale.mV[VY], te, object->getID());
             }
+
+            // Also align GLTF material if any
+            LLGLTFMaterial::TextureInfo gltf_info_index = mPanel->getPBRTextureInfo();
+            LLVector2 gltf_offset, gltf_scale;
+            F32 gltf_rot;
+
+            if (gltf_info_index == LLGLTFMaterial::GLTF_TEXTURE_INFO_COUNT)
+            {
+                // "Complete material" - update all texture transforms
+                LLGLTFMaterial new_override;
+                const LLTextureEntry* tep = object->getTE(te);
+                if (tep && tep->getGLTFMaterialOverride())
+                {
+                    new_override = *tep->getGLTFMaterialOverride();
+                }
+                bool any_changed = false;
+
+                for (U32 i = 0; i < LLGLTFMaterial::GLTF_TEXTURE_INFO_COUNT; ++i)
+                {
+                    if (facep->calcAlignedPlanarGLTF(mCenterFace, &gltf_offset, &gltf_scale, &gltf_rot, i))
+                    {
+                        LLGLTFMaterial::TextureTransform& transform = new_override.mTextureTransform[i];
+                        transform.mOffset.set(gltf_offset.mV[0], gltf_offset.mV[1]);
+                        transform.mScale.set(gltf_scale.mV[0], gltf_scale.mV[1]);
+                        transform.mRotation = gltf_rot;
+                        any_changed = true;
+                    }
+                }
+
+                if (any_changed)
+                {
+                    LLGLTFMaterialList::queueModify(object, te, &new_override);
+                }
+            }
+            else
+            {
+                if (facep->calcAlignedPlanarGLTF(mCenterFace, &gltf_offset, &gltf_scale, &gltf_rot, gltf_info_index))
+                {
+                    LLGLTFMaterial new_override;
+                    const LLTextureEntry* tep = object->getTE(te);
+                    if (tep && tep->getGLTFMaterialOverride())
+                    {
+                        new_override = *tep->getGLTFMaterialOverride();
+                    }
+
+                    LLGLTFMaterial::TextureTransform& transform = new_override.mTextureTransform[gltf_info_index];
+                    transform.mOffset.set(gltf_offset.mV[0], gltf_offset.mV[1]);
+                    transform.mScale.set(gltf_scale.mV[0], gltf_scale.mV[1]);
+                    transform.mRotation = gltf_rot;
+
+                    LLGLTFMaterialList::queueModify(object, te, &new_override);
+                }
+            }
         }
         if (!set_aligned)
         {
@@ -1056,6 +1105,9 @@ void LLPanelFace::updateUI(bool force_set_values /*false*/)
         // only turn on auto-adjust button if there is a media renderer and the media is loaded
         mBtnAlign->setEnabled(editable);
 
+        // enable if needed before changing selection
+        mComboMatMedia->setEnabledByValue("Materials", !has_pbr_material);
+
         if (mComboMatMedia->getCurrentIndex() < MATMEDIA_MATERIAL)
         {
             // When selecting an object with a pbr and UI combo is not set,
@@ -1170,26 +1222,22 @@ void LLPanelFace::updateUI(bool force_set_values /*false*/)
         bool missing_asset = false;
         {
             LLGLenum image_format = GL_RGB;
+            bool has_alpha = false;
             bool identical_image_format = false;
-            LLSelectedTE::getImageFormat(image_format, identical_image_format, missing_asset);
+            LLSelectedTE::getImageFormat(image_format, has_alpha, identical_image_format, missing_asset);
 
             if (!missing_asset)
             {
-                mIsAlpha = false;
+                mIsAlpha = has_alpha;
                 switch (image_format)
                 {
                     case GL_RGBA:
                     case GL_ALPHA:
-                    {
-                        mIsAlpha = true;
-                    }
-                    break;
-
                     case GL_RGB:
                         break;
                     default:
                     {
-                        LL_WARNS() << "Unexpected tex format in LLPanelFace...resorting to no alpha" << LL_ENDL;
+                        LL_WARNS() << "Unexpected tex format in LLPanelFace..." << LL_ENDL;
                     }
                     break;
                 }
@@ -1209,7 +1257,7 @@ void LLPanelFace::updateUI(bool force_set_values /*false*/)
 
             // See if that's been overridden by a material setting for same...
             //
-            LLSelectedTEMaterial::getCurrentDiffuseAlphaMode(alpha_mode, identical_alpha_mode, mIsAlpha);
+            LLSelectedTEMaterial::getCurrentDiffuseAlphaMode(alpha_mode, identical_alpha_mode);
 
             // it is invalid to have any alpha mode other than blend if transparency is greater than zero ...
             // Want masking? Want emissive? Tough! You get BLEND!
@@ -1219,6 +1267,12 @@ void LLPanelFace::updateUI(bool force_set_values /*false*/)
             alpha_mode = mIsAlpha ? alpha_mode : LLMaterial::DIFFUSE_ALPHA_MODE_NONE;
 
             mComboAlphaMode->getSelectionInterface()->selectNthItem(alpha_mode);
+            mComboAlphaMode->setTentative(!identical_alpha_mode);
+            if (!identical_alpha_mode)
+            {
+                std::string multiple = LLTrans::getString("multiple_textures");
+                mComboAlphaMode->setLabel(multiple);
+            }
             updateAlphaControls();
 
             mExcludeWater &= (LLMaterial::DIFFUSE_ALPHA_MODE_BLEND == alpha_mode);
@@ -1658,7 +1712,6 @@ void LLPanelFace::updateUI(bool force_set_values /*false*/)
             mCheckFullbright->setValue((S32)(fullbright_flag != 0));
             mCheckFullbright->setEnabled(editable && !has_pbr_material);
             mCheckFullbright->setTentative(!identical_fullbright);
-            mComboMatMedia->setEnabledByValue("Materials", !has_pbr_material);
         }
 
         // Repeats per meter
@@ -1908,7 +1961,7 @@ void LLPanelFace::updateUI(bool force_set_values /*false*/)
         if (mColorSwatch)
         {
             mColorSwatch->setEnabled( false );
-            mColorSwatch->setFallbackImage(LLUI::getUIImage("locked_image.j2c") );
+            mColorSwatch->setFallbackImage(LLUI::getUIImage("locked_image") );
             mColorSwatch->setValid(false);
         }
 
@@ -2209,7 +2262,7 @@ void LLPanelFace::refreshMedia()
 
 
     // check if all faces have media(or, all dont have media)
-    LLFloaterMediaSettings::getInstance()->mIdenticalHasMediaInfo = selected_objects->getSelectedTEValue(&func, bool_has_media);
+    bool identical_has_media_info = selected_objects->getSelectedTEValue(&func, bool_has_media);
 
     const LLMediaEntry default_media_data;
 
@@ -2231,7 +2284,8 @@ void LLPanelFace::refreshMedia()
     } func_media_data(default_media_data);
 
     LLMediaEntry media_data_get;
-    LLFloaterMediaSettings::getInstance()->mMultipleMedia = !(selected_objects->getSelectedTEValue(&func_media_data, media_data_get));
+    bool multiple_media = !(selected_objects->getSelectedTEValue(&func_media_data, media_data_get));
+    bool multiple_valid_media = false;
 
     std::string multi_media_info_str = LLTrans::getString("Multiple Media");
     std::string media_title = "";
@@ -2240,12 +2294,12 @@ void LLPanelFace::refreshMedia()
 
     mAddMedia->setEnabled(editable);
     // IF all the faces have media (or all dont have media)
-    if (LLFloaterMediaSettings::getInstance()->mIdenticalHasMediaInfo)
+    if (identical_has_media_info)
     {
         // TODO: get media title and set it.
         mTitleMediaText->clear();
         // if identical is set, all faces are same (whether all empty or has the same media)
-        if (!(LLFloaterMediaSettings::getInstance()->mMultipleMedia))
+        if (!multiple_media)
         {
             // Media data is valid
             if (media_data_get != default_media_data)
@@ -2266,9 +2320,9 @@ void LLPanelFace::refreshMedia()
     else // not all face has media but at least one does.
     {
         // seleted faces have not identical value
-        LLFloaterMediaSettings::getInstance()->mMultipleValidMedia = selected_objects->isMultipleTEValue(&func_media_data, default_media_data);
+        multiple_valid_media = selected_objects->isMultipleTEValue(&func_media_data, default_media_data);
 
-        if (LLFloaterMediaSettings::getInstance()->mMultipleValidMedia)
+        if (multiple_valid_media)
         {
             media_title = multi_media_info_str;
         }
@@ -2305,7 +2359,7 @@ void LLPanelFace::refreshMedia()
     // load values for media settings
     updateMediaSettings();
 
-    LLFloaterMediaSettings::initValues(mMediaSettings, editable);
+    LLFloaterMediaSettings::initValues(mMediaSettings, editable, identical_has_media_info, multiple_media, multiple_valid_media);
 }
 
 void LLPanelFace::unloadMedia()
@@ -3295,23 +3349,22 @@ void LLPanelFace::onSelectTexture()
     sendTexture();
 
     LLGLenum image_format;
+    bool has_alpha;
     bool identical_image_format = false;
     bool missing_asset = false;
-    LLSelectedTE::getImageFormat(image_format, identical_image_format, missing_asset);
+    LLSelectedTE::getImageFormat(image_format, has_alpha, identical_image_format, missing_asset);
 
-    U32 alpha_mode = LLMaterial::DIFFUSE_ALPHA_MODE_NONE;
     if (!missing_asset)
     {
+        U32 alpha_mode = has_alpha ? LLMaterial::DIFFUSE_ALPHA_MODE_BLEND : LLMaterial::DIFFUSE_ALPHA_MODE_NONE;
         switch (image_format)
         {
         case GL_RGBA:
         case GL_ALPHA:
-            alpha_mode = LLMaterial::DIFFUSE_ALPHA_MODE_BLEND;
-            break;
         case GL_RGB:
             break;
         default:
-            LL_WARNS() << "Unexpected tex format in LLPanelFace...resorting to no alpha" << LL_ENDL;
+            LL_WARNS() << "Unexpected tex format in LLPanelFace..." << LL_ENDL;
             break;
         }
 
@@ -3378,6 +3431,7 @@ void LLPanelFace::onSelectNormalTexture(const LLSD& data)
 // TODO: test if there is media on the item and only allow editing if present
 void LLPanelFace::onClickBtnEditMedia()
 {
+    LLFloaterMediaSettings::getInstance(); // make sure floater we are about to open exists before refreshMedia
     refreshMedia();
     LLFloaterReg::showInstance("media_settings");
 }
@@ -3396,6 +3450,7 @@ void LLPanelFace::onClickBtnAddMedia()
     // check if multiple faces are selected
     if (LLSelectMgr::getInstance()->getSelection()->isMultipleTESelected())
     {
+        LLFloaterMediaSettings::getInstance(); // make sure floater we are about to open exists before refreshMedia
         refreshMedia();
         LLNotificationsUtil::add("MultipleFacesSelected", LLSD(), LLSD(), multipleFacesSelectedConfirm);
     }
@@ -4722,7 +4777,6 @@ void LLPanelFace::onPasteTexture(LLViewerObject* objectp, S32 te)
                 if (allow)
                 {
                     objectp->setRenderMaterialID(te, te_data["te"]["pbr"].asUUID(), false /*managing our own update*/);
-                    tep->setGLTFRenderMaterial(nullptr);
                     tep->setGLTFMaterialOverride(nullptr);
 
                     if (te_data["te"].has("pbr_override"))
@@ -4738,7 +4792,6 @@ void LLPanelFace::onPasteTexture(LLViewerObject* objectp, S32 te)
             else
             {
                 objectp->setRenderMaterialID(te, LLUUID::null, false /*send in bulk later*/ );
-                tep->setGLTFRenderMaterial(nullptr);
                 tep->setGLTFMaterialOverride(nullptr);
 
                 // blank out most override data on the server
@@ -5261,12 +5314,13 @@ void LLPanelFace::LLSelectedTE::getFace(LLFace*& face_to_return, bool& identical
     identical_face = LLSelectMgr::getInstance()->getSelection()->getSelectedTEValue(&get_te_face_func, face_to_return, false, (LLFace*)nullptr);
 }
 
-void LLPanelFace::LLSelectedTE::getImageFormat(LLGLenum& image_format_to_return, bool& identical_face, bool& missing_asset)
+void LLPanelFace::LLSelectedTE::getImageFormat(LLGLenum& image_format_to_return, bool& has_alpha, bool& identical_face, bool& missing_asset)
 {
     struct LLSelectedTEGetmatId : public LLSelectedTEFunctor
     {
         LLSelectedTEGetmatId()
             : mImageFormat(GL_RGB)
+            , mHasAlpha(false)
             , mIdentical(true)
             , mMissingAsset(false)
             , mFirstRun(true)
@@ -5281,6 +5335,10 @@ void LLPanelFace::LLSelectedTE::getImageFormat(LLGLenum& image_format_to_return,
             {
                 format = image->getPrimaryFormat();
                 missing = image->isMissingAsset();
+                if (format == GL_RGBA || format == GL_ALPHA)
+                {
+                    mHasAlpha = true;
+                }
             }
 
             if (mFirstRun)
@@ -5297,6 +5355,7 @@ void LLPanelFace::LLSelectedTE::getImageFormat(LLGLenum& image_format_to_return,
             return true;
         }
         LLGLenum mImageFormat;
+        bool mHasAlpha;
         bool mIdentical;
         bool mMissingAsset;
         bool mFirstRun;
@@ -5304,6 +5363,7 @@ void LLPanelFace::LLSelectedTE::getImageFormat(LLGLenum& image_format_to_return,
     LLSelectMgr::getInstance()->getSelection()->applyToTEs(&func);
 
     image_format_to_return = func.mImageFormat;
+    has_alpha = func.mHasAlpha;
     identical_face = func.mIdentical;
     missing_asset = func.mMissingAsset;
 }
@@ -5485,32 +5545,40 @@ void LLPanelFace::LLSelectedTEMaterial::getMaxNormalRepeats(F32& repeats, bool& 
     identical = LLSelectMgr::getInstance()->getSelection()->getSelectedTEValue( &max_norm_repeats_func, repeats);
 }
 
-void LLPanelFace::LLSelectedTEMaterial::getCurrentDiffuseAlphaMode(U8& diffuse_alpha_mode, bool& identical, bool diffuse_texture_has_alpha)
+void LLPanelFace::LLSelectedTEMaterial::getCurrentDiffuseAlphaMode(U8& diffuse_alpha_mode, bool& identical)
 {
     struct LLSelectedTEGetDiffuseAlphaMode : public LLSelectedTEGetFunctor<U8>
     {
-        LLSelectedTEGetDiffuseAlphaMode() : _isAlpha(false) {}
-        LLSelectedTEGetDiffuseAlphaMode(bool diffuse_texture_has_alpha) : _isAlpha(diffuse_texture_has_alpha) {}
+        LLSelectedTEGetDiffuseAlphaMode() {}
         virtual ~LLSelectedTEGetDiffuseAlphaMode() {}
 
         U8 get(LLViewerObject* object, S32 face)
         {
-            U8 diffuse_mode = _isAlpha ? LLMaterial::DIFFUSE_ALPHA_MODE_BLEND : LLMaterial::DIFFUSE_ALPHA_MODE_NONE;
-
             LLTextureEntry* tep = object->getTE(face);
             if (tep)
             {
                 LLMaterial* mat = tep->getMaterialParams().get();
                 if (mat)
                 {
-                    diffuse_mode = mat->getDiffuseAlphaMode();
+                    return mat->getDiffuseAlphaMode();
                 }
             }
 
+            bool has_alpha = false;
+            LLViewerTexture* image = object->getTEImage(face);
+            if (image)
+            {
+                LLGLenum format = image->getPrimaryFormat();
+                if (format == GL_RGBA || format == GL_ALPHA)
+                {
+                    has_alpha = true;
+                }
+            }
+
+            U8 diffuse_mode = has_alpha ? LLMaterial::DIFFUSE_ALPHA_MODE_BLEND : LLMaterial::DIFFUSE_ALPHA_MODE_NONE;
             return diffuse_mode;
         }
-        bool _isAlpha; // whether or not the diffuse texture selected contains alpha information
-    } get_diff_mode(diffuse_texture_has_alpha);
+    } get_diff_mode;
     identical = LLSelectMgr::getInstance()->getSelection()->getSelectedTEValue( &get_diff_mode, diffuse_alpha_mode);
 }
 

@@ -44,7 +44,7 @@
 #include <CoreGraphics/CGDisplayConfiguration.h>
 
 #include <IOKit/IOCFPlugIn.h>
-#include <IOKit/IOKitLib.h>
+#include "llwindowmacosx_iokit.h"
 #include <IOKit/IOMessage.h>
 #include <IOKit/hid/IOHIDUsageTables.h>
 #include <IOKit/hid/IOHIDLib.h>
@@ -165,6 +165,7 @@ LLWindowMacOSX::LLWindowMacOSX(LLWindowCallbacks* callbacks,
     // Route them to a dummy callback structure until the end of constructor.
     LLWindowCallbacks null_callbacks;
     mCallbacks = &null_callbacks;
+    mIsConstructing = true;
 
     // Voodoo for calling cocoa from carbon (see llwindowmacosx-objc.mm).
     setupCocoa();
@@ -236,9 +237,8 @@ LLWindowMacOSX::LLWindowMacOSX(LLWindowCallbacks* callbacks,
     }
 
     mCallbacks = callbacks;
+    mIsConstructing = false;
     stop_glerror();
-
-
 }
 
 // These functions are used as wrappers for our internal event handling callbacks.
@@ -387,7 +387,7 @@ void callLeftMouseUp(float *pos, MASK mask)
 
 }
 
-void callDoubleClick(float *pos, MASK mask)
+void callLeftDoubleClick(float* pos, MASK mask)
 {
     if (!gWindowImplementation)
     {
@@ -401,7 +401,41 @@ void callDoubleClick(float *pos, MASK mask)
     LLCoordGL   outCoords;
     outCoords.mX = ll_round(pos[0]);
     outCoords.mY = ll_round(pos[1]);
-    gWindowImplementation->getCallbacks()->handleDoubleClick(gWindowImplementation, outCoords, gKeyboard->currentMask(true));
+    gWindowImplementation->getCallbacks()->handleLeftMouseDoubleClick(gWindowImplementation, outCoords, gKeyboard->currentMask(true));
+}
+
+void callRightDoubleClick(float* pos, MASK mask)
+{
+    if (!gWindowImplementation)
+    {
+        return;
+    }
+    if (gWindowImplementation->allowsLanguageInput())
+    {
+        gWindowImplementation->interruptLanguageTextInput();
+    }
+
+    LLCoordGL   outCoords;
+    outCoords.mX = ll_round(pos[0]);
+    outCoords.mY = ll_round(pos[1]);
+    gWindowImplementation->getCallbacks()->handleRightMouseDoubleClick(gWindowImplementation, outCoords, gKeyboard->currentMask(true));
+}
+
+void callMiddleDoubleClick(float* pos, MASK mask)
+{
+    if (!gWindowImplementation)
+    {
+        return;
+    }
+    if (gWindowImplementation->allowsLanguageInput())
+    {
+        gWindowImplementation->interruptLanguageTextInput();
+    }
+
+    LLCoordGL   outCoords;
+    outCoords.mX = ll_round(pos[0]);
+    outCoords.mY = ll_round(pos[1]);
+    gWindowImplementation->getCallbacks()->handleMiddleMouseDoubleClick(gWindowImplementation, outCoords, gKeyboard->currentMask(true));
 }
 
 void callResize(unsigned int width, unsigned int height)
@@ -409,6 +443,14 @@ void callResize(unsigned int width, unsigned int height)
     if (gWindowImplementation && gWindowImplementation->getCallbacks())
     {
         gWindowImplementation->getCallbacks()->handleResize(gWindowImplementation, width, height);
+    }
+}
+
+void callRequestResolutionUpdate()
+{
+    if (gWindowImplementation && gWindowImplementation->getCallbacks())
+    {
+        gWindowImplementation->getCallbacks()->handleRequestResolutionUpdate(gWindowImplementation);
     }
 }
 
@@ -610,7 +652,7 @@ void callQuitHandler()
 {
     if (gWindowImplementation && gWindowImplementation->getCallbacks())
     {
-        if(gWindowImplementation->getCallbacks()->handleCloseRequest(gWindowImplementation))
+        if(gWindowImplementation->getCallbacks()->handleCloseRequest(gWindowImplementation, true))
         {
             gWindowImplementation->getCallbacks()->handleQuit(gWindowImplementation);
         }
@@ -703,6 +745,11 @@ void getPreeditLocation(float *location, unsigned int length)
         location[0] = c[0];
         location[1] = c[1];
     }
+}
+
+bool windowCallbacksReady()
+{
+    return gWindowImplementation && !gWindowImplementation->isConstructing();
 }
 
 void LLWindowMacOSX::updateMouseDeltas(float* deltas)
@@ -985,7 +1032,7 @@ bool LLWindowMacOSX::getPosition(LLCoordScreen *position)
     }
     else if(mWindow)
     {
-        const CGPoint & pos = getContentViewBoundsPosition(mWindow);
+        CGPoint pos = getContentViewRect(mWindow).origin;
 
         position->mX = pos.x;
         position->mY = pos.y;
@@ -1012,7 +1059,7 @@ bool LLWindowMacOSX::getSize(LLCoordScreen *size)
     }
     else if(mWindow)
     {
-        const CGSize & sz = gHiDPISupport ? getDeviceContentViewSize(mWindow, mGLView) : getContentViewBoundsSize(mWindow);
+        CGSize sz = getBackingViewRect(mWindow, mGLView).size;
 
         size->mX = sz.width;
         size->mY = sz.height;
@@ -1038,7 +1085,7 @@ bool LLWindowMacOSX::getSize(LLCoordWindow *size)
     }
     else if(mWindow)
     {
-        const CGSize & sz = gHiDPISupport ? getDeviceContentViewSize(mWindow, mGLView) : getContentViewBoundsSize(mWindow);
+        CGSize sz = getBackingViewRect(mWindow, mGLView).size;
 
         size->mX = sz.width;
         size->mY = sz.height;
@@ -1224,6 +1271,12 @@ void LLWindowMacOSX::setMouseClipping( bool b )
     adjustCursorDecouple();
 }
 
+#if LL_DARWIN
+// For CGSetLocalEventsSuppressionInterval there is no replacement in modern API
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
+
 bool LLWindowMacOSX::setCursorPosition(const LLCoordWindow position)
 {
     bool result = false;
@@ -1253,13 +1306,14 @@ bool LLWindowMacOSX::setCursorPosition(const LLCoordWindow position)
     // trigger mouse move callback
     LLCoordGL gl_pos;
     convertCoords(position, &gl_pos);
-    float scale = getSystemUISize();
-    gl_pos.mX *= scale;
-    gl_pos.mY *= scale;
     mCallbacks->handleMouseMove(this, gl_pos, (MASK)0);
 
     return result;
 }
+
+#if LL_DARWIN
+#pragma clang diagnostic pop
+#endif
 
 bool LLWindowMacOSX::getCursorPosition(LLCoordWindow *position)
 {
@@ -1485,8 +1539,9 @@ bool LLWindowMacOSX::convertCoords(LLCoordScreen from, LLCoordWindow* to)
 
         convertScreenToWindow(mWindow, mouse_point);
 
-        to->mX = mouse_point[0];
-        to->mY = mouse_point[1];
+        float scale_factor = getSystemUISize();
+        to->mX = mouse_point[0] * scale_factor;
+        to->mY = mouse_point[1] * scale_factor;
 
         return true;
     }
@@ -1498,9 +1553,9 @@ bool LLWindowMacOSX::convertCoords(LLCoordWindow from, LLCoordScreen *to)
     if(mWindow)
     {
         float mouse_point[2];
-
-        mouse_point[0] = from.mX;
-        mouse_point[1] = from.mY;
+        float scale_factor = getSystemUISize();
+        mouse_point[0] = from.mX / scale_factor;
+        mouse_point[1] = from.mY / scale_factor;
 
         convertWindowToScreen(mWindow, mouse_point);
 
@@ -2371,7 +2426,7 @@ bool LLWindowMacOSX::getInputDevices(U32 device_type_filter,
     io_iterator_t io_iter = 0;
 
     // create an IO object iterator
-    result = IOServiceGetMatchingServices( kIOMasterPortDefault, device_dict_ref, &io_iter );
+    result = IOServiceGetMatchingServices( kLLIOMainPort, device_dict_ref, &io_iter );
     if ( kIOReturnSuccess != result )
     {
         LL_WARNS("Joystick") << "IOServiceGetMatchingServices failed" << LL_ENDL;
@@ -2625,6 +2680,12 @@ std::vector<std::string> LLWindowMacOSX::getDynamicFallbackFontList()
     return std::vector<std::string>();
 }
 
+LLFontFallbackMatch LLWindowMacOSX::findFallbackFontForChar(llwchar wch)
+{
+    // Not implemented on macOS; would use CoreText (CTFontCreateForString).
+    return LLFontFallbackMatch();
+}
+
 // static
 MASK LLWindowMacOSX::modifiersToMask(S16 modifiers)
 {
@@ -2637,7 +2698,7 @@ MASK LLWindowMacOSX::modifiersToMask(S16 modifiers)
 
 F32 LLWindowMacOSX::getSystemUISize()
 {
-    return gHiDPISupport ? ::getDeviceUnitSize(mGLView) : LLWindow::getSystemUISize();
+    return ::getDeviceUnitSize(mGLView);
 }
 
 #if LL_OS_DRAGDROP_ENABLED

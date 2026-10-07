@@ -377,6 +377,9 @@ void LLFloaterEmojiPicker::initialize()
     {
         if (!mHint.empty())
         {
+            // Hack: Trying to open floater, search for a match,
+            // and hide floater immediately if no match found,
+            // instead of checking prior to opening
             hideFloater();
             return;
         }
@@ -404,6 +407,12 @@ void LLFloaterEmojiPicker::initialize()
             showPreview(true);
         }
         return;
+    }
+
+    if (!mHint.empty() && getSoundFlags() == LLView::SILENT)
+    {
+        // Sounds were supressed
+        make_ui_sound("UISndWindowOpen");
     }
 
     mGroups->setVisible(true);
@@ -992,6 +1001,9 @@ bool LLFloaterEmojiPicker::moveFocusedIconNext()
     if (mHoveredIcon)
         return false;
 
+    if (mFocusedIconRow < 0 || static_cast<size_t>(mFocusedIconRow) >= mEmojiGrid->getPanelList().size())
+        return false;
+
     LLScrollingPanel* panel = mEmojiGrid->getPanelList()[mFocusedIconRow];
     LLEmojiGridRow* row = dynamic_cast<LLEmojiGridRow*>(panel);
     S32 colCount = row ? static_cast<S32>(row->mList->getPanelList().size()) : 0;
@@ -1284,7 +1296,7 @@ void LLFloaterEmojiPicker::saveState()
             if (!recentlyUsed.empty())
                 recentlyUsed += ",";
             char buffer[32];
-            sprintf(buffer, "%u", (U32)emoji);
+            snprintf(buffer, sizeof(buffer), "%u", (U32)emoji);
             recentlyUsed += buffer;
             if (!--maxCount)
                 break;
@@ -1301,7 +1313,7 @@ void LLFloaterEmojiPicker::saveState()
             if (!frequentlyUsed.empty())
                 frequentlyUsed += ",";
             char buffer[32];
-            sprintf(buffer, "%u:%u", (U32)it.first, (U32)it.second);
+            snprintf(buffer, sizeof(buffer), "%u:%u", (U32)it.first, (U32)it.second);
             frequentlyUsed += buffer;
             if (!--maxCount)
                 break;

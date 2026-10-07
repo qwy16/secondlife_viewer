@@ -42,6 +42,7 @@
 #include "llnotificationsutil.h"
 #include "lltextbox.h"
 #include "lltoggleablemenu.h"
+#include "llviewercontrol.h"
 #include "llviewermenu.h"
 #include "lllandmarkactions.h"
 #include "llclipboard.h"
@@ -215,8 +216,18 @@ std::string LLTeleportHistoryFlatItem::getTimestamp()
     // Only show timestamp for today and yesterday
     if(time_diff < seconds_today + seconds_in_day)
     {
-        timestamp = "[" + LLTrans::getString("TimeHour12")+"]:["
-                        + LLTrans::getString("TimeMin")+"] ["+ LLTrans::getString("TimeAMPM")+"]";
+        static bool use_24h = gSavedSettings.getBOOL("Use24HourClock");
+        if (use_24h)
+        {
+            timestamp = "[" + LLTrans::getString("TimeHour") + "]:["
+                + LLTrans::getString("TimeMin") + "]";
+        }
+        else
+        {
+            timestamp = "[" + LLTrans::getString("TimeHour12") + "]:["
+                + LLTrans::getString("TimeMin") + "] [" + LLTrans::getString("TimeAMPM") + "]";
+        }
+
         LLSD substitution;
         substitution["datetime"] = (S32) date.secondsSinceEpoch();
         LLStringUtil::format(timestamp, substitution);
@@ -1001,6 +1012,11 @@ LLFlatListView* LLTeleportHistoryPanel::getFlatListViewFromTab(LLAccordionCtrlTa
 
 void LLTeleportHistoryPanel::gotSLURLCallback(const std::string& slurl)
 {
+    if (slurl.empty())
+    {
+        LLNotificationsUtil::add("LandmarkLocationUnknown");
+        return;
+    }
     LLClipboard::instance().copyToClipboard(utf8str_to_wstring(slurl), 0, static_cast<S32>(slurl.size()));
 
     LLSD args;

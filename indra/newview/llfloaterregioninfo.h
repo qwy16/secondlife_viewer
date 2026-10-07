@@ -272,6 +272,7 @@ public:
     static void onClickBakeTerrain(void*);
     bool callbackBakeTerrain(const LLSD& notification, const LLSD& response);
     bool callbackTextureHeights(const LLSD& notification, const LLSD& response);
+    void callbackMaterialCommit(S32 index);
 
 protected:
     bool sendUpdate() override;
@@ -514,8 +515,8 @@ private:
     void searchAgent(LLNameListCtrl* listCtrl, const std::string& search_string);
     void copyListToClipboard(std::string list_name);
 
-    bool mPendingUpdate;
-    bool mCtrlsEnabled;
+    bool mPendingUpdate = false;
+    bool mCtrlsEnabled = false;
 };
 
 #endif

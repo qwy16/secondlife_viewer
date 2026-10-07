@@ -21,6 +21,9 @@
 	<panel.string name="acquiredDate">
 		[wkday,datetime,local] [mth,datetime,local] [day,datetime,local] [hour,datetime,local]:[min,datetime,local]:[second,datetime,local] [year,datetime,local]
 	</panel.string>
+  <panel.string name="acquiredDateAMPM">
+    [wkday,datetime,local] [mth,datetime,local] [day,datetime,local] [hour12,datetime,local]:[min,datetime,local]:[second,datetime,local] [ampm,datetime,local] [year,datetime,local]
+  </panel.string>
 	<panel.string name="origin_inventory">
 		(Inventar)
 	</panel.string>
@@ -38,7 +41,8 @@
 			<text name="LabelItemDescTitle">
 				Beschreibung:
 			</text>
-			<line_editor name="LabelItemDesc" tool_tip="Bei Auswahl der Option &quot;Mauszeiger-Tipps zu allen Objekten&quot; in den Viewer-Einstellungen wird für alle Objekte das Popup mit der Objektbeschreibung unter dem Mauszeiger eingeblendet. Die formelle Beschreibung ist auf 127 Byte begrenzt, und alle längeren Zeichenketten werden gekürzt."/>
+            <line_editor name="LabelItemDescSingleLine" tool_tip="Bei Auswahl der Option &quot;Mauszeiger-Tipps zu allen Objekten&quot; in den Viewer-Einstellungen wird für alle Objekte das Popup mit der Objektbeschreibung unter dem Mauszeiger eingeblendet. Die formelle Beschreibung ist auf 127 Byte begrenzt, und alle längeren Zeichenketten werden gekürzt."/>
+			<text_editor name="LabelItemDescMultiLine" tool_tip="Bei Auswahl der Option &quot;Mauszeiger-Tipps zu allen Objekten&quot; in den Viewer-Einstellungen wird für alle Objekte das Popup mit der Objektbeschreibung unter dem Mauszeiger eingeblendet. Die formelle Beschreibung ist auf 127 Byte begrenzt, und alle längeren Zeichenketten werden gekürzt."/>
 			<text name="LabelCreatorTitle">
 				Ersteller:
 			</text>
